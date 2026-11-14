@@ -732,6 +732,11 @@ dialog input[type=password], dialog input[type=text], dialog select {
 }
 dialog input:focus, dialog select:focus { outline: 3px solid var(--focus); outline-offset: 0; }
 .local-status { border: 0; border-radius: 14px; background: var(--fill); }
+/* Sheets never grow wider than the screen: long model names and command lines shrink or scroll inside */
+dialog { overflow-x: hidden; }
+dialog form, dialog label.field, .local-status, .local-status ol { grid-template-columns: minmax(0, 1fr); }
+dialog form > *, dialog label.field > *, .local-status > *, .local-status li { min-width: 0; }
+dialog select, dialog input[type=text], dialog input[type=password] { width: 100%; min-width: 0; text-overflow: ellipsis; }
 .local-status.ok { background: rgba(52, 199, 89, .14); }
 .local-status.bad { background: var(--warn-soft); }
 
@@ -1587,9 +1592,13 @@ function segmentLines(canvas) {
     // Printed text has no unbroken dark run a fifth of the line wide; separators and borders do.
     if (maxRun > cw * 0.2) rule[y] = 1; else prof[y] = n;
   }
-  // A rule's antialiased edges are rules too.
-  for (let pass = 0; pass < 2; pass++) for (let y = 1; y < H - 1; y++)
-    if (!rule[y] && (rule[y - 1] || rule[y + 1]) && prof[y] > 0) { rule[y] = 2; prof[y] = 0; }
+  // A rule's antialiased edges are rules too: grow each rule by at most 2 rows. Each pass looks at a copy, so a
+  // row just marked can't mark the next one (that used to spread through every line touching a decorated header).
+  for (let pass = 0; pass < 2; pass++) {
+    const was = rule.slice();
+    for (let y = 1; y < H - 1; y++)
+      if (!was[y] && (was[y - 1] || was[y + 1]) && prof[y] > 0) { rule[y] = 2; prof[y] = 0; }
+  }
   // Line cores: the dense rows of each line (letter bodies). Vowel marks fill the space between lines with a
   // little ink, so a low threshold chains lines together; a share of the typical ink level separates them.
   const inked = Array.from(prof).filter(v => v > 0).sort((a, b) => a - b);
@@ -2701,6 +2710,25 @@ function renderOutputText() {
 
 function setActions(on) {
   el.copyBtn.disabled = el.saveBtn.disabled = el.joinBtn.disabled = !on;
+  renderJoin();
+}
+// After "Join lines" the button offers to put the lines back, as long as the joined text hasn't been edited since.
+function renderJoin() {
+  const it = active(), undo = !!it && it.joinedFrom != null && el.output.value === it.joinedTo;
+  el.joinBtn.querySelector(".lbl-wide").textContent = undo ? "Undo join" : "Join lines";
+  el.joinBtn.title = undo ? "Put the original line breaks back" : "Merge broken lines into paragraphs";
+  el.joinBtn.setAttribute("aria-pressed", undo);
+}
+// Replace the whole text the way typing does, so the browser's own undo (Ctrl + Z / Cmd + Z) can take it back.
+function replaceOutput(text) {
+  el.output.focus(); el.output.select();
+  let ok = false;
+  try { ok = document.execCommand("insertText", false, text); } catch {}
+  if (!ok || el.output.value !== text) {   // very old browsers: plain replace (no undo history)
+    el.output.value = text;
+    el.output.dispatchEvent(new Event("input"));
+  }
+  el.output.setSelectionRange(0, 0); el.output.scrollTop = 0;
 }
 function updateCounts() {
   const t = el.output.value.trim();
@@ -2867,7 +2895,7 @@ el.viewEdit.onclick = () => setView("edit");
 el.output.addEventListener("input", () => {
   const it = active();
   if (it && it.status === "done") { it.text = el.output.value; it.edited = true; }
-  setActions(!!el.output.value.trim());
+  setActions(!!el.output.value.trim());   // also relabels Join lines / Undo join
   updateCounts();
 });
 el.copyBtn.onclick = async () => { if (await copyText(el.output.value)) toast("Text copied to clipboard"); };
@@ -2879,17 +2907,25 @@ el.saveBtn.onclick = () => {
 };
 el.joinBtn.onclick = () => {
   const it = active();
+  if (view === "review") setView("edit");   // the text box must be visible to change it
+  // Second click: put the original lines back.
+  if (it && it.joinedFrom != null && el.output.value === it.joinedTo) {
+    const back = it.joinedFrom;
+    it.joinedFrom = it.joinedTo = null;
+    replaceOutput(back); renderJoin();
+    toast("Original lines restored");
+    return;
+  }
   const before = el.output.value;
   const joined = before
     .split(/\n\s*\n/)
     .map(p => p.replace(/-\n(?=\S)/g, "").replace(/\s*\n\s*/g, " ").trim())
     .join("\n\n");
   if (joined === before) { toast("Nothing to join"); return; }
-  el.output.value = joined;
-  if (it) { it.text = joined; it.edited = true; }
-  updateCounts();
-  if (view === "review") setView("edit");   // show the result
-  toast("Lines joined. Ctrl + Z to undo");
+  replaceOutput(joined);
+  if (it) { it.joinedFrom = before; it.joinedTo = joined; }
+  renderJoin();
+  toast(`Lines joined. Click Undo join, or press ${/Mac/.test(navigator.platform) ? "⌘" : "Ctrl"} + Z`);
 };
 function applySize() {
   document.documentElement.style.setProperty("--out-size", fontSize + "px");
@@ -2978,11 +3014,26 @@ async function refreshLocalStatus() {
   ld.use.disabled = true;
   const r = await checkLocal();
   const size = /4B/i.test(local.model) ? "2.9 GB" : "560 MB";
-  if (!r.running) {
+  if (!r.running && location.protocol === "file:") {
+    // Opened by double-clicking index.html: Ollama refuses pages that aren't served from localhost.
+    const mac = /Mac/.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
     s.className = "local-status bad";
-    s.innerHTML = `<b>Ollama isn't running on this PC.</b>
+    s.innerHTML = `<b>Texiq was opened as a file, so Ollama won't answer it.</b>
+      <span>Ollama only talks to pages served from <code style="display:inline;padding:1px 5px">localhost</code>. Close this tab and open Texiq with
+      ${mac ? "<b>Texiq.app</b>" : "<b>Start Texiq</b> in the Texiq folder"} instead of double-clicking <b>index.html</b>.
+      It opens at <b>http://localhost:8765</b>, where Local AI works.</span>`;
+  } else if (!r.running) {
+    s.className = "local-status bad";
+    const mac =/Mac/.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+    s.innerHTML = mac
+      ? `<b>Ollama isn't running on this Mac.</b>
       <ol>
-        <li>Install it from <a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com/download</a>, or in PowerShell:<code>winget install Ollama.Ollama</code></li>
+        <li>Not set up yet? In the Texiq folder, double-click <b>Set up Local AI (optional).command</b>. It installs Ollama and the model. Or download Ollama from <a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com/download</a>.</li>
+        <li>Open <b>Ollama</b> from Applications (a llama icon appears in the menu bar), then press <b>Check again</b>.</li>
+      </ol>`
+      : `<b>Ollama isn't running on this PC.</b>
+      <ol>
+        <li>Not set up yet? In the Texiq folder, double-click <b>Set up Local AI (optional)</b>. It installs Ollama and the model. Or install it from <a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com/download</a>, or in PowerShell:<code>winget install Ollama.Ollama</code></li>
         <li>Start Ollama (it runs in the system tray), then press <b>Check again</b>.</li>
       </ol>`;
   } else if (!r.has) {

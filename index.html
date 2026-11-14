@@ -2149,6 +2149,46 @@ async function runLocal(item) {
   item.conf = null; item.lines = null;
 }
 
+/* A strip that holds two or three printed lines (vowel marks bridged the gap, e.g. the rows of a poem) is cut
+   apart, so each line (each verse) is read on its own. Height alone can't tell (one line with marks above and
+   below is tall too, and cutting it makes Nuqta invent text for the marks-only half): a strip is cut only where
+   its ink profile shows separate dense letter bands, at the faintest row between them. */
+function splitMergedLines(layout, ctx, medH) {
+  const out = [];
+  for (const l of layout) {
+    if (l.gap) { out.push(l); continue; }
+    const [x0, y0, x1, y1] = l.rect, h = y1 - y0, w = x1 - x0;
+    if (h < medH * 1.3 || w < 20) { out.push(l); continue; }
+    const d = ctx.getImageData(x0, y0, w, h).data, ink = new Float32Array(h);
+    for (let y = 0; y < h; y++) { let s = 0; for (let x = 0; x < w; x += 2) { const i = (y * w + x) * 4; if (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114 < 140) s++; } ink[y] = s; }
+    const r = Math.max(1, Math.round(h / 40)), sm = new Float32Array(h);
+    for (let y = 0; y < h; y++) { let s = 0, n = 0; for (let k = -r; k <= r; k++) if (y + k >= 0 && y + k < h) { s += ink[y + k]; n++; } sm[y] = s / n; }
+    const mx = Math.max(...sm);
+    // Dense bands: rows at ≥ 45 % of the strip's densest row (letter bodies; vowel-mark rows are much lighter).
+    const bands = [];
+    for (let y = 0; y < h;) {
+      if (sm[y] >= mx * 0.45) { const t = y; while (y < h && sm[y] >= mx * 0.45) y++; bands.push([t, y]); } else y++;
+    }
+    // Real separate lines: bands at least a third of a line tall, with a clear dip between them.
+    const big = bands.filter(([a, b]) => b - a >= medH * 0.2);
+    const cuts = [];
+    for (let i = 1; i < big.length; i++) {
+      let best = big[i - 1][1], low = Infinity;
+      for (let y = big[i - 1][1]; y < big[i][0]; y++) if (sm[y] < low) { low = sm[y]; best = y; }
+      const peak = Math.min(Math.max(...sm.slice(...big[i - 1])), Math.max(...sm.slice(...big[i])));
+      if (big[i][0] - big[i - 1][1] >= 2 && low < peak * 0.35) cuts.push(best);
+    }
+    if (!cuts.length) { out.push(l); continue; }
+    const pad = Math.round(medH * 0.1);
+    let top = 0;
+    for (const c of [...cuts, h]) {
+      if (c - top >= medH * 0.5) out.push({ rect: [x0, Math.max(y0, y0 + top - pad), x1, Math.min(y1, y0 + c + pad)], thin: false });
+      top = c;
+    }
+  }
+  return out;
+}
+
 // Lines Nuqta "reads" out of rows of dashes, dots or vowel marks: mostly punctuation ("- في قهوة - - - - -"),
 // or, from a thin strip, only digits ("٥٠٠٠٠") or a couple of letters. Real lines are almost all letters
 // (ayah numbers and footnote marks are a small share).
@@ -2225,6 +2265,7 @@ async function runLocalLines(item, prompt) {
     layout.splice(i, 1); i--;
   }
   layout = layout.filter((l, i, a) => !l.gap || (i > 0 && !a[i - 1].gap));
+  layout = splitMergedLines(layout, wctx, medH);
   item.skippedPics = skippedPics;
   const rows = layout.filter(l => !l.gap);
   const out = [];   // review lines in original-image pixels
@@ -3260,9 +3301,11 @@ function render() {
 /* ---------------- Review view ----------------
    Shows each word the reader was unsure about, and links every line of text to its place on the image. */
 function hasReview(it) { return !!(it && it.status === "done" && it.lines && it.lines.some(l => !l.gap)); }
+const isDoubt = w => w.conf < DOUBT;
+const doubtTitle = w => `${w.conf}% sure. Click to see it on the image`;
 function doubts(it) {
   const out = [];
-  it.lines.forEach((ln, l) => !ln.gap && ln.words.forEach((w, wi) => { if (w.conf < DOUBT) out.push([l, wi]); }));
+  it.lines.forEach((ln, l) => !ln.gap && ln.words.forEach((w, wi) => { if (isDoubt(w)) out.push([l, wi]); }));
   return out;
 }
 
@@ -3300,7 +3343,7 @@ function renderOverlay() {
   if (view !== "review" || !hasReview(it) || !el.stageImg.naturalWidth) return;
   it.lines.forEach((ln, l) => {
     if (ln.gap) return;
-    const doubtful = ln.words.some(w => w.conf < DOUBT);
+    const doubtful = ln.words.some(isDoubt);
     const hit = placeBox("hit" + (doubtful ? " doubt" : ""), ln.bbox, el.stageImg);
     hit.title = doubtful ? "Has words to check. Click to see this line in the text" : "Click to see this line in the text";
     hit.onclick = () => select(l, null, true);
@@ -3334,7 +3377,7 @@ function renderReview() {
       el.reviewBody.dataset.key = key;
       el.reviewBody.innerHTML = it.lines.map((ln, l) => ln.gap ? `<div class="rl gap"></div>` :
         `<div class="rl" data-l="${l}">${ln.words.map((w, wi) =>
-          `${w.pre}<span class="w${w.conf < DOUBT ? " doubt" : ""}" data-l="${l}" data-w="${wi}"${w.conf < DOUBT ? ` title="${w.conf}% sure. Click to see it on the image"` : ""}>${esc(w.text)}</span>`
+          `${w.pre}<span class="w${isDoubt(w) ? " doubt" : ""}" data-l="${l}" data-w="${wi}"${isDoubt(w) ? ` title="${esc(doubtTitle(w))}"` : ""}>${esc(w.text)}</span>`
         ).join("")}</div>`).join("");
       // New reading: lines arrive one after another (only the first 40 are staggered)
       el.reviewBody.classList.remove("reveal"); void el.reviewBody.offsetWidth; el.reviewBody.classList.add("reveal");

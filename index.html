@@ -2112,7 +2112,7 @@ async function runOCR(item) {
     item.dropped = all.filter(l => !l.gap).length - kept.filter(l => !l.gap).length;
     // Tidy the gap markers left behind
     item.lines = kept.filter((l, i, a) => !l.gap || (i > 0 && i < a.length - 1 && !a[i - 1].gap));
-    if (item.dropped || cols) {
+    if (item.dropped || cols || data.lines.trimmed) {
       item.text = stripZwnj(linesToText(item.lines));
       const ws = item.lines.flatMap(l => l.gap ? [] : l.words);
       item.conf = ws.length ? Math.round(ws.reduce((a, w) => a + w.conf, 0) / ws.length) : 0;
@@ -2153,8 +2153,13 @@ function tesseractLines(data, map) {
     for (const ln of p.lines || []) {
       const words = (ln.words || [])
         .filter(w => !/^[|\][{}॥।¦]+$/.test(w.text.trim()))   // page edges and borders read as bars
-        .map((w, i) => ({ text: stripZwnj(w.text), conf: Math.round(w.confidence), bbox: box(w.bbox), pre: i ? " " : "" }))
+        .map(w => ({ text: stripZwnj(w.text), conf: Math.round(w.confidence), bbox: box(w.bbox) }))
         .filter(w => w.text);
+      // Malayalam's own digits (൦–൯) are almost never printed today. A doubtful word made only of them is a
+      // misread, usually a large headline letter or a frame edge; drop it.
+      const kept = words.filter(w => !(w.conf < 70 && /^[൦-൯]+[.,:;'’]*$/.test(w.text)));
+      if (kept.length < words.length) out.trimmed = true;
+      words.length = 0; kept.forEach((w, i) => words.push({ ...w, pre: i ? " " : "" }));
       if (words.length) out.push({ bbox: box(ln.bbox), words });
     }
   }

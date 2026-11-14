@@ -732,6 +732,48 @@ dialog input[type=password], dialog input[type=text], dialog select {
 }
 dialog input:focus, dialog select:focus { outline: 3px solid var(--focus); outline-offset: 0; }
 .local-status { border: 0; border-radius: 14px; background: var(--fill); }
+/* Changes light up green: a copy of the text sits behind the (transparent) text box with the changed words
+   marked, glows, holds, then fades. The text box stays editable on top. */
+#output { position: relative; z-index: 1; }
+.flash-layer {
+  position: absolute; z-index: 0; overflow: hidden; pointer-events: none; color: transparent; margin: 0;
+  white-space: pre-wrap; overflow-wrap: break-word; unicode-bidi: plaintext; box-sizing: border-box;
+}
+.flash-layer mark {
+  color: transparent; border-radius: 5px; padding: 1px 0; background: transparent;
+  animation: light-up 5.2s var(--ease-out) both; animation-delay: var(--d, 0s);
+}
+.flash-layer.whole mark { border-radius: 3px; }
+@keyframes light-up {
+  0%   { background: rgba(52, 199, 89, 0);   box-shadow: 0 0 0 0 rgba(52, 199, 89, 0); }
+  8%   { background: rgba(52, 199, 89, .5);  box-shadow: 0 0 14px 3px rgba(52, 199, 89, .55); }
+  25%  { background: rgba(52, 199, 89, .32); box-shadow: 0 0 4px 0 rgba(52, 199, 89, .3); }
+  75%  { background: rgba(52, 199, 89, .26); box-shadow: 0 0 0 0 rgba(52, 199, 89, 0); }
+  100% { background: rgba(52, 199, 89, 0);   box-shadow: 0 0 0 0 rgba(52, 199, 89, 0); }
+}
+/* The image glows green when it was cropped, rotated or restored */
+.stage img.lit { animation: img-lit 1.8s var(--ease-out) both; }
+@keyframes img-lit {
+  0%   { box-shadow: var(--shadow-pop), 0 0 0 0 rgba(52, 199, 89, 0); }
+  15%  { box-shadow: var(--shadow-pop), 0 0 0 4px rgba(52, 199, 89, .85), 0 0 28px 6px rgba(52, 199, 89, .45); }
+  100% { box-shadow: var(--shadow-pop), 0 0 0 0 rgba(52, 199, 89, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flash-layer mark { animation-duration: 4s; box-shadow: none !important; }
+  .stage img.lit { animation: none; }
+}
+/* Crop: drag a box on the image; everything outside it dims */
+.imgwrap.cropping { overflow: hidden; border-radius: 10px; }
+.cropper { position: absolute; inset: 0; z-index: 3; cursor: crosshair; touch-action: none; background: rgba(0, 0, 0, .38); }
+.cropper.has { background: transparent; }
+.cropper .sel { position: absolute; border: 2px solid #fff; border-radius: 2px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, .38), 0 0 0 1px rgba(0, 0, 0, .4) inset; }
+.crop-bar {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 8px;
+  padding: 6px 6px 6px 14px; border-radius: 980px; background: var(--material); box-shadow: var(--shadow-pop); font-size: 13px; color: var(--ink-2);
+  -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); white-space: nowrap; max-width: calc(100% - 24px);
+  animation: materialize .3s var(--ease-out) both;
+}
+.crop-bar span { overflow: hidden; text-overflow: ellipsis; }
 /* Sheets never grow wider than the screen: long model names and command lines shrink or scroll inside */
 dialog { overflow-x: hidden; }
 dialog form, dialog label.field, .local-status, .local-status ol { grid-template-columns: minmax(0, 1fr); }
@@ -899,6 +941,7 @@ dialog select, dialog input[type=text], dialog input[type=password] { width: 100
     </label>
     <label class="switch" style="font-size:14px"><input type="checkbox" id="g-auto"> In Fast mode, send Indian-language pages to Google</label>
     <p style="font-size:13px">Pricing: the first 1,000 pages each month are free, then about US$1.50 per 1,000 pages (check Google's current pricing). The key stays in this browser and is sent only to Google.</p>
+    <p style="font-size:13px" id="g-use"></p>
     <div class="err" id="g-err" aria-live="polite"></div>
     <div class="row">
       <button type="button" class="btn ghost left" id="g-forget">Remove key</button>
@@ -916,6 +959,13 @@ dialog select, dialog input[type=text], dialog input[type=password] { width: 100
       <h2 id="img-h">Image</h2>
       <span class="meta" id="img-meta"></span>
       <div class="spacer"></div>
+      <button class="btn ghost" id="orig-btn" title="Go back to the image as you added it, and read it again" hidden>Original</button>
+      <button class="btn ghost icon" id="rotate-btn" title="Rotate right, then read again" aria-label="Rotate image" hidden>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+      </button>
+      <button class="btn ghost icon" id="crop-btn" title="Crop: drag a box around the part to read" aria-label="Crop image" hidden>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>
+      </button>
       <button class="btn ghost icon" id="remove-btn" title="Remove image" aria-label="Remove image" hidden>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
       </button>
@@ -1101,6 +1151,336 @@ const langLabel = codes => codes.map(c => byCode[c].name).join(", ");
 const sameLangs = (a, b) => a.length === b.length && a.every(c => b.includes(c));
 const active = () => items.find(i => i.id === activeId);
 
+/* ---------------- Saved session: images and their text survive a reload or a closed tab ----------------
+   Kept in this browser only (IndexedDB), like the settings. Removing an image or "Clear all" removes it here too. */
+var savedDb = null, savedTimer = 0, savedWarned = false;
+const savedSig = new Map();   // id -> what was last written, so unchanged pages aren't rewritten
+const SAVE_SKIP = new Set(["url", "group", "streaming", "progress", "stage", "indet"]);
+function savedOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("texiq", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("items", { keyPath: "id" });
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+const sigOf = (it, i) => [i, it.status, it.ver, it.edited, it.blob?.size, (it.text || "").length, it.text?.slice(-40)].join("|");
+function saveSoon() { if (savedDb) { clearTimeout(savedTimer); savedTimer = setTimeout(saveNow, 700); } }
+function saveNow() {
+  savedTimer = 0;
+  if (!savedDb) return;
+  try {
+    const tx = savedDb.transaction("items", "readwrite"), st = tx.objectStore("items");
+    const ids = new Set(items.map(i => i.id));
+    for (const id of [...savedSig.keys()]) if (!ids.has(id)) { st.delete(id); savedSig.delete(id); }
+    items.forEach((it, i) => {
+      const s = sigOf(it, i);
+      if (savedSig.get(it.id) === s) return;
+      const rec = { order: i, groupName: it.group?.name || null, groupLangs: it.group?.langs || null };
+      for (const k in it) if (!SAVE_SKIP.has(k)) rec[k] = it[k];
+      // A page still being read is saved as waiting, and read again after a reload.
+      if (rec.status !== "done" && rec.status !== "err") rec.status = "queued";
+      st.put(rec); savedSig.set(it.id, s);
+    });
+    tx.onerror = () => { savedSig.clear(); if (!savedWarned) { savedWarned = true; toast("Couldn't save every image in this browser (storage may be full)."); } };
+  } catch (e) { console.warn("Couldn't save the session", e); }
+}
+async function restoreSaved() {
+  try { savedDb = await savedOpen(); } catch (e) { console.warn("Saving is off in this browser", e); return; }
+  const rows = await new Promise(res => {
+    try { const r = savedDb.transaction("items").objectStore("items").getAll(); r.onsuccess = () => res(r.result || []); r.onerror = () => res([]); }
+    catch { res([]); }
+  });
+  if (!rows.length) { saveSoon(); return; }
+  // Give restored images fresh ids (something may have been pasted already) and rewrite the store.
+  try { savedDb.transaction("items", "readwrite").objectStore("items").clear(); } catch {}
+  rows.sort((a, b) => a.order - b.order);
+  const groups = {}, restored = [];
+  for (const r of rows) {
+    if (!(r.blob instanceof Blob)) continue;
+    const it = { ...r, id: nextId++, url: URL.createObjectURL(r.blob) };
+    delete it.order; delete it.groupName; delete it.groupLangs;
+    if (r.groupName) it.group = groups[r.groupName] ||= { name: r.groupName, langs: r.groupLangs };
+    restored.push(it);
+  }
+  items.unshift(...restored);
+  restored.filter(it => it.status === "queued").forEach(enqueue);   // were still being read
+  if (!activeId && restored.length) activeId = restored[0].id;
+  render(); saveSoon();
+  toast(`Restored ${restored.length} image${restored.length === 1 ? "" : "s"} from your last visit`);
+}
+addEventListener("pagehide", () => { if (savedTimer) { clearTimeout(savedTimer); saveNow(); } });
+
+/* ---------------- Google Vision use this month (this browser) ---------------- */
+const gUse = {
+  month() { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); },
+  count() { const v = store.get("gUse", null); return v && v.m === gUse.month() ? v.n : 0; },
+  add() {
+    const n = gUse.count() + 1;
+    store.set("gUse", { m: gUse.month(), n });
+    if (n === 900) toast("900 of the 1,000 free Google pages used this month (counted in this browser)");
+    if (n === 1000) toast("All 1,000 free Google pages used this month. More cost about US$1.50 per 1,000.");
+    return n;
+  },
+  label() { return `${gUse.count().toLocaleString()} of 1,000 free pages used this month`; },
+};
+
+/* ---------------- Quran checker ----------------
+   When an Arabic reading is Quran, find the ayat it covers in the Tanzil Uthmani text (assets/quran-uthmani.txt,
+   Tanzil Project, CC BY 3.0, used verbatim) and offer that verified text, laid out on the page's own lines.
+   Matching ignores tashkeel and alef/hamza spelling, so it finds the place even when the reading has mistakes. */
+const AR_MARKS = /[ؐ-ًؚ-ٰٟۖ-ۭـ]/g;
+const normAr = w => w.normalize("NFC").replace(AR_MARKS, "").replace(/[ٱأإآ]/g, "ا").replace(/ى/g, "ي")
+  .replace(/ة/g, "ه").replace(/ؤ/g, "و").replace(/ئ/g, "ي").replace(/[^ء-ي]/g, "");
+// For counting real differences: keep tashkeel, drop tatweel and pause marks (often left out of print readings).
+const nearAr = w => w.normalize("NFC").replace(/[ـۖ-ۜ۞۩]/g, "");
+const AR_DIGITS = "٠١٢٣٤٥٦٧٨٩", arNum = n => String(n).replace(/\d/g, d => AR_DIGITS[d]);
+let quranData = null;
+async function loadQuran() {
+  if (quranData) return quranData;
+  const txt = await (await fetch("assets/quran-uthmani.txt")).text();
+  const words = [], tri = new Map();
+  for (const line of txt.split("\n")) {
+    const m = line.match(/^(\d+)\|(\d+)\|(.+)$/); if (!m) continue;
+    const parts = m[3].trim().split(/\s+/);
+    parts.forEach((w, i) => { const n = normAr(w); if (n) words.push({ w, n, s: +m[1], a: +m[2], last: i === parts.length - 1 }); });
+  }
+  for (let i = 0; i + 2 < words.length; i++) {
+    const k = words[i].n + " " + words[i + 1].n + " " + words[i + 2].n;
+    (tri.get(k) || tri.set(k, []).get(k)).push(i);
+  }
+  return (quranData = { words, tri });
+}
+function editRatio(a, b) {   // 0 = same, 1 = nothing alike
+  if (a === b) return 0;
+  const m = a.length, n = b.length; if (!m || !n) return 1;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n] / Math.max(m, n);
+}
+async function checkQuran(it) {
+  if (it.status !== "done" || !it.text || it.quran !== undefined) return;
+  const arabicShare = count(it.text, /[؀-ۿ]/g) / Math.max(1, it.text.replace(/\s/g, "").length);
+  if (arabicShare < 0.6) return;
+  let Q; try { Q = await loadQuran(); } catch (e) { console.warn("Quran text unavailable", e); return; }
+  // The reading's words, remembering which line each came from.
+  const rows = it.text.split("\n"), toks = [];
+  rows.forEach((row, r) => row.split(/\s+/).forEach(w => { const n = normAr(w); if (n.length) toks.push({ w, n, r }); }));
+  if (toks.length < 6) { it.quran = null; return; }
+  // Where in the Quran: vote with word triples.
+  const votes = new Map();
+  for (let i = 0; i + 2 < toks.length; i++) {
+    for (const p of Q.tri.get(toks[i].n + " " + toks[i + 1].n + " " + toks[i + 2].n) || []) votes.set(p - i, (votes.get(p - i) || 0) + 1);
+  }
+  let off = null, best = 0;
+  for (const [o, v] of votes) if (v > best) { best = v; off = o; }
+  if (off === null || best < 3) { it.quran = null; return; }
+  // Align the reading with that stretch of the Quran (words may be missing, extra or misread).
+  const q0 = Math.max(0, off - 25), q1 = Math.min(Q.words.length, off + toks.length + 60), seg = Q.words.slice(q0, q1);
+  const N = toks.length, M = seg.length, cost = Array.from({ length: N + 1 }, () => new Float32Array(M + 1)), back = Array.from({ length: N + 1 }, () => new Uint8Array(M + 1));
+  for (let i = 1; i <= N; i++) { cost[i][0] = i; back[i][0] = 1; }   // leading Quran words are free (page starts mid-surah)
+  for (let i = 1; i <= N; i++) for (let j = 1; j <= M; j++) {
+    const r = editRatio(toks[i - 1].n, seg[j - 1].n), sub = cost[i - 1][j - 1] + (r <= 0.34 ? r : 1.2);
+    const del = cost[i - 1][j] + 1, ins = cost[i][j - 1] + 1;   // extra word in the reading / Quran word not read
+    if (sub <= del && sub <= ins) { cost[i][j] = sub; back[i][j] = 0; } else if (del <= ins) { cost[i][j] = del; back[i][j] = 1; } else { cost[i][j] = ins; back[i][j] = 2; }
+  }
+  let j = 0; for (let k = 1; k <= M; k++) if (cost[N][k] < cost[N][j]) j = k;   // trailing Quran words are free too
+  const pair = new Array(N).fill(-1); let i = N;
+  while (i > 0 && j > 0) { const b = back[i][j]; if (b === 0) { pair[i - 1] = q0 + j - 1; i--; j--; } else if (b === 1) i--; else j--; }
+  const matched = pair.filter((p, k) => p >= 0 && editRatio(toks[k].n, Q.words[p].n) <= 0.34).length;
+  if (matched < 6 || matched / N < 0.5) { it.quran = null; return; }
+  const used = pair.filter(p => p >= 0), first = Math.min(...used), last = Math.max(...used);
+  // Lay the Tanzil words out on the page's lines; Quran words the reading skipped go to the next line.
+  const lineEnd = new Map(); toks.forEach((t, k) => { if (pair[k] >= 0) lineEnd.set(t.r, Math.max(lineEnd.get(t.r) ?? -1, pair[k])); });
+  let next = first, diffs = 0;
+  const outRows = rows.map((row, r) => {
+    if (!lineEnd.has(r)) return row;   // a heading, ornament or blank line: keep as read
+    const end = lineEnd.get(r), ws = [];
+    for (let p = next; p <= end; p++) { ws.push(Q.words[p].w); if (Q.words[p].last) ws.push(arNum(Q.words[p].a)); }
+    next = end + 1;
+    return ws.join(" ");
+  });
+  // An ayah number printed at the start of the next line (as on many mushaf pages) stays there.
+  for (let r = 1; r < outRows.length; r++) {
+    const lead = rows[r].trim().split(/\s+/)[0];
+    if (/^[٠-٩]+$/.test(lead) && outRows[r] !== rows[r] && outRows[r - 1].endsWith(" " + lead)) {
+      outRows[r - 1] = outRows[r - 1].slice(0, -(lead.length + 1));
+      outRows[r] = lead + " " + outRows[r];
+    }
+  }
+  toks.forEach((t, k) => { if (pair[k] < 0 || nearAr(t.w) !== nearAr(Q.words[pair[k]].w)) diffs++; });
+  diffs += (last - first + 1) - used.length;   // Quran words the reading left out
+  const A = Q.words[first], B = Q.words[last];
+  it.quran = { range: A.s === B.s ? `${A.s}:${A.a}–${B.a}` : `${A.s}:${A.a} – ${B.s}:${B.a}`, diffs, text: outRows.join("\n") };
+  saveSoon();
+  if (it.id === activeId) renderOutput();
+}
+function showQuranNotice(it) {
+  const q = it.quran, shown = el.output.value === q.text;
+  el.notice.hidden = false;
+  el.notice.innerHTML = `<span><b>Quran ${esc(q.range)}.</b> ${shown ? "Showing the verified Quran text." : q.diffs ? `${q.diffs} word${q.diffs === 1 ? "" : "s"} differ from the Quran text.` : "The reading matches the Quran text."}
+    <a href="https://tanzil.net" target="_blank" rel="noopener">Quran text: Tanzil.net</a></span>${!shown && q.diffs ? `<button id="use-quran">Use Quran text</button>` : ""}`;
+  const b = $("use-quran");
+  if (b) b.onclick = () => {
+    setView("edit");
+    const before = el.output.value;
+    replaceOutput(q.text);
+    renderOutput();
+    const n = flashChanges(before, q.text);
+    toast(`Quran text applied (${q.range}): ${n} word${n === 1 ? "" : "s"} corrected, shown in green. ${/Mac/.test(navigator.platform) ? "⌘" : "Ctrl"} + Z to undo`);
+  };
+}
+
+/* ---------------- Green light-up for applied changes ----------------
+   flashChanges(before, after): marks the words in `after` that are new or different (word-level LCS), or, when only
+   line breaks changed (Join lines), the lines that changed. Drawn behind the text box, which stays editable. */
+let flashTimer = 0;
+function changedRanges(before, after) {
+  const tok = s => [...s.matchAll(/\S+/g)].map(m => ({ t: m[0], s: m.index, e: m.index + m[0].length }));
+  const A = tok(before), B = tok(after), out = [];
+  if (A.length * B.length <= 4e6) {
+    const n = A.length, m = B.length, L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+      L[i][j] = A[i].t === B[j].t ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    let i = 0, j = 0;
+    while (j < m) {
+      if (i < n && A[i].t === B[j].t) { i++; j++; }
+      else if (i < n && L[i + 1][j] >= L[i][j + 1]) i++;
+      else { out.push([B[j].s, B[j].e]); j++; }
+    }
+    if (out.length) return { ranges: out, whole: false };
+  }
+  // Same words, different line breaks (Join lines / Undo join), or a very long text: mark the changed lines.
+  const old = new Set(before.split("\n").map(l => l.trim()));
+  let pos = 0;
+  for (const line of after.split("\n")) { if (line.trim() && !old.has(line.trim())) out.push([pos, pos + line.length]); pos += line.length + 1; }
+  return { ranges: out, whole: true };
+}
+function flashChanges(before, after) {
+  document.querySelector(".flash-layer")?.remove(); clearTimeout(flashTimer);
+  if (before === after) return 0;
+  const { ranges, whole } = changedRanges(before, after);
+  if (!ranges.length) return 0;
+  const ta = el.output, cs = getComputedStyle(ta), layer = document.createElement("div");
+  layer.className = "flash-layer" + (whole ? " whole" : "");
+  layer.dir = ta.dir || "auto";
+  for (const p of ["font", "letterSpacing", "wordSpacing", "lineHeight", "textAlign", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "tabSize"]) layer.style[p] = cs[p];
+  Object.assign(layer.style, { top: ta.offsetTop + "px", left: ta.offsetLeft + "px", width: ta.clientWidth + "px", height: ta.clientHeight + "px" });
+  let html = "", at = 0;
+  ranges.forEach(([s, e], k) => { html += esc(after.slice(at, s)) + `<mark style="--d:${Math.min(k, 30) * 25}ms">${esc(after.slice(s, e))}</mark>`; at = e; });
+  layer.innerHTML = html + esc(after.slice(at)) + "\n";
+  ta.before(layer);
+  const sync = () => { layer.scrollTop = ta.scrollTop; };
+  sync(); ta.addEventListener("scroll", sync);
+  const done = () => { layer.remove(); ta.removeEventListener("scroll", sync); ta.removeEventListener("input", done); };
+  ta.addEventListener("input", done, { once: true });   // typing changes the layout: stop the highlight
+  flashTimer = setTimeout(done, 5600 + Math.min(ranges.length, 30) * 25);
+  return whole ? ranges.length : ranges.length;
+}
+function flashImage() {
+  const img = el.stageImg;
+  const go = () => { img.classList.remove("lit"); void img.offsetWidth; img.classList.add("lit"); };
+  if (img.complete && img.naturalWidth) go(); else img.addEventListener("load", go, { once: true });
+}
+
+/* ---------------- Crop and rotate, then read again ---------------- */
+let crop = null;   // { it, layer, bar, wrap, r: [x0, y0, x1, y1] as 0–1 of the image }
+const isBusy = it => it.status === "busy" || it.status === "queued";
+function renderEditTools() {
+  const it = active(), on = !!it && !it.error?.startsWith?.("Couldn't open");
+  const can = on && !isBusy(it);
+  ["rotate-btn", "crop-btn"].forEach(id => { $(id).hidden = !on; $(id).disabled = !can; });
+  $("orig-btn").hidden = !it?.original; $("orig-btn").disabled = !can;
+  if (crop && (crop.it !== it || !can)) endCrop();
+}
+function readAgain(it) {
+  if (it.source === "pdf-text") it.source = "pdf-scan";   // the PDF's own text no longer matches the image
+  Object.assign(it, {
+    langs: [...selected], engine, text: "", lines: null, conf: null, error: null, dims: null, edited: false,
+    detected: null, detect: el.autoDetect.checked && engine === "fast", reusedLangs: false,
+    autoLocal: false, autoGoogle: false, localSkipped: false, langVer, joinedFrom: null, joinedTo: null, quran: undefined,
+  });
+  enqueue(it); render();
+}
+function replaceImage(it, blob, what) {
+  if (!it.original) it.original = it.blob;
+  URL.revokeObjectURL(it.url);
+  it.blob = blob; it.url = URL.createObjectURL(blob);
+  readAgain(it); flashImage();
+  toast(`${what}. Reading again…`);
+}
+const toPng = c => new Promise(r => c.toBlob(r, "image/png"));
+async function rotateImage() {
+  const it = active(); if (!it || isBusy(it)) return;
+  const bmp = await createImageBitmap(it.blob), c = newCanvas(bmp.height, bmp.width), x = c.getContext("2d");
+  x.translate(c.width, 0); x.rotate(Math.PI / 2); x.drawImage(bmp, 0, 0);
+  replaceImage(it, await toPng(c), "Rotated");
+}
+function endCrop() {
+  if (!crop) return;
+  crop.layer.remove(); crop.bar.remove(); crop.wrap.classList.remove("cropping");
+  crop = null; $("crop-btn").setAttribute("aria-pressed", "false");
+}
+function startCrop() {
+  const it = active(); if (!it || isBusy(it)) return;
+  if (crop) { endCrop(); return; }   // the crop button toggles
+  el.overlay.innerHTML = "";   // hide Review boxes while cropping
+  const wrap = $("imgwrap"), layer = document.createElement("div"), box = document.createElement("div");
+  layer.className = "cropper"; box.className = "sel"; box.hidden = true; layer.append(box);
+  wrap.classList.add("cropping"); wrap.append(layer);
+  const bar = document.createElement("div");
+  bar.className = "crop-bar";
+  bar.innerHTML = `<span>Drag a box around the text to read</span><button class="btn" type="button" id="crop-cancel">Cancel</button><button class="btn primary" type="button" id="crop-go" disabled>Read selection</button>`;
+  el.preview.append(bar);
+  crop = { it, layer, bar, wrap, r: null };
+  $("crop-btn").setAttribute("aria-pressed", "true");
+  const draw = () => {
+    box.hidden = !crop.r; layer.classList.toggle("has", !!crop.r);
+    if (!crop.r) return;
+    const [a, b, c, d] = crop.r;
+    Object.assign(box.style, { left: a * 100 + "%", top: b * 100 + "%", width: (c - a) * 100 + "%", height: (d - b) * 100 + "%" });
+  };
+  layer.onpointerdown = e => {
+    e.preventDefault(); layer.setPointerCapture(e.pointerId);
+    const R = layer.getBoundingClientRect(), c01 = v => Math.min(1, Math.max(0, v));
+    const fx = v => c01((v - R.left) / R.width), fy = v => c01((v - R.top) / R.height), sx = fx(e.clientX), sy = fy(e.clientY);
+    layer.onpointermove = ev => { const x = fx(ev.clientX), y = fy(ev.clientY); crop.r = [Math.min(sx, x), Math.min(sy, y), Math.max(sx, x), Math.max(sy, y)]; draw(); };
+    layer.onpointerup = layer.onpointercancel = () => {
+      layer.onpointermove = layer.onpointerup = layer.onpointercancel = null;
+      const ok = !!crop.r && (crop.r[2] - crop.r[0]) * R.width > 12 && (crop.r[3] - crop.r[1]) * R.height > 12;
+      if (!ok) { crop.r = null; draw(); }
+      $("crop-go").disabled = !ok;
+    };
+  };
+  $("crop-cancel").onclick = () => { endCrop(); renderOverlay(); };
+  $("crop-go").onclick = applyCrop;
+}
+async function applyCrop() {
+  if (!crop?.r) return;
+  const { it, r } = crop; endCrop();
+  const bmp = await createImageBitmap(it.blob), W = bmp.width, H = bmp.height;
+  const x0 = Math.round(r[0] * W), y0 = Math.round(r[1] * H), w = Math.max(1, Math.round(r[2] * W) - x0), h = Math.max(1, Math.round(r[3] * H) - y0);
+  const c = newCanvas(w, h), x = c.getContext("2d");
+  x.fillStyle = "#fff"; x.fillRect(0, 0, w, h); x.drawImage(bmp, x0, y0, w, h, 0, 0, w, h);
+  replaceImage(it, await toPng(c), "Cropped");
+}
+$("rotate-btn").onclick = rotateImage;
+$("crop-btn").onclick = startCrop;
+$("orig-btn").onclick = () => {
+  const it = active(); if (!it?.original || isBusy(it)) return;
+  URL.revokeObjectURL(it.url);
+  it.blob = it.original; it.url = URL.createObjectURL(it.blob); delete it.original;
+  readAgain(it); flashImage(); toast("Back to the original image. Reading again…");
+};
+document.addEventListener("keydown", e => {
+  if (!crop) return;
+  if (e.key === "Escape") { e.stopPropagation(); endCrop(); renderOverlay(); }
+  if (e.key === "Enter" && !$("crop-go").disabled) { e.preventDefault(); applyCrop(); }
+}, true);
+
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; }
   catch {
@@ -1243,6 +1623,9 @@ function skewAngle(src) {
 function findColumns(src) {
   const { c, k } = small(src, 700), w = c.width, h = c.height, g = grayOf(c), t = otsu(g);
   if (w < 200) return null;
+  // A strip only a few lines tall (a cropped line, a caption) has no columns: the gap between two words
+  // would otherwise look like a gutter.
+  if (h < w * 0.35) return null;
   const ink = new Float32Array(w);
   // Ignore the top and bottom fifth: headings, photos and footers often span both columns.
   for (let y = Math.round(h * 0.2); y < h * 0.8; y++) for (let x = 0; x < w; x++) if (g[y * w + x] < t) ink[x]++;
@@ -1363,7 +1746,7 @@ const STAGES = {
 let queue = Promise.resolve();
 function enqueue(item) {
   item.status = "queued";
-  queue = queue.then(() => runOCR(item)).catch(e => {
+  queue = queue.then(() => runOCR(item)).then(() => { checkQuran(item); }).catch(e => {
     console.error(e);
     item.status = "err"; item.streaming = false;
     item.error = "Something went wrong while reading this image. Retry, or try another mode.";
@@ -1884,6 +2267,7 @@ async function runGoogle(item) {
     if (/referer|referrer|blocked/i.test(m)) throw new GoogleError("This key isn't allowed from this website. Add the site's address to the key's restrictions.", true);
     throw new GoogleError("Google error: " + m.slice(0, 160), false);
   }
+  gUse.add();   // one page of the monthly free allowance
   const doc = j.responses?.[0]?.fullTextAnnotation;
   item.conf = null; item.lines = [];
   if (!doc) { item.text = ""; return; }
@@ -2660,7 +3044,7 @@ function renderOutputText() {
   el.status.textContent = it.source === "pdf-text"
     ? `${pg}Text taken from the PDF itself · no OCR needed${/�/.test(it.text) ? " · � marks characters the PDF doesn't define" : ""}`
     : isGoogle ? pg + how + (it.text
-      ? `Read by Google Cloud Vision · ${it.conf}% confidence${it.columns > 1 ? " · 2 columns read separately" : it.blocks > 1 ? ` · ${it.blocks} sections` : ""}${it.autoGoogle ? ` · ${langLabel(it.langs)} detected` : ""}`
+      ? `Read by Google Cloud Vision · ${it.conf}% confidence${it.columns > 1 ? " · 2 columns read separately" : it.blocks > 1 ? ` · ${it.blocks} sections` : ""}${it.autoGoogle ? ` · ${langLabel(it.langs)} detected` : ""} · ${gUse.count().toLocaleString()}/1,000 free pages this month`
       : "Google found no text in this image.")
     : pg + how + (!it.text
       ? (isAi ? "The AI found no text in this image." : `No text found as ${langLabel(it.langs)}.`)
@@ -2695,6 +3079,8 @@ function renderOutputText() {
       : "Google Vision handles photos, columns and old print much better (1,000 pages a month free)."}`;
     target = better;
   }
+  // A Quran page: offer the verified Tanzil text instead of a reading nag.
+  if (it.quran && (!msg || low)) { showQuranNotice(it); msg = ""; }
   if (msg) {
     const action = target === "same" ? "Read again" : `Read with ${ENGINE_NAME[target]}`;
     el.notice.hidden = false;
@@ -2757,7 +3143,9 @@ function render() {
   renderOutput();
   renderProgress();
   renderEngine();   // the mode switch follows the image on screen
+  renderEditTools();
   layoutStage();
+  saveSoon();
 }
 
 /* ---------------- Review view ----------------
@@ -2897,6 +3285,8 @@ el.output.addEventListener("input", () => {
   const it = active();
   if (it && it.status === "done") { it.text = el.output.value; it.edited = true; }
   setActions(!!el.output.value.trim());   // also relabels Join lines / Undo join
+  if (it?.quran && !el.notice.hidden && el.notice.querySelector("a[href*='tanzil']")) showQuranNotice(it);   // after Ctrl+Z, offer the Quran text again
+  saveSoon();
   updateCounts();
 });
 el.copyBtn.onclick = async () => { if (await copyText(el.output.value)) toast("Text copied to clipboard"); };
@@ -2911,9 +3301,9 @@ el.joinBtn.onclick = () => {
   if (view === "review") setView("edit");   // the text box must be visible to change it
   // Second click: put the original lines back.
   if (it && it.joinedFrom != null && el.output.value === it.joinedTo) {
-    const back = it.joinedFrom;
+    const back = it.joinedFrom, was = el.output.value;
     it.joinedFrom = it.joinedTo = null;
-    replaceOutput(back); renderJoin();
+    replaceOutput(back); renderJoin(); flashChanges(was, back);
     toast("Original lines restored");
     return;
   }
@@ -2925,7 +3315,7 @@ el.joinBtn.onclick = () => {
   if (joined === before) { toast("Nothing to join"); return; }
   replaceOutput(joined);
   if (it) { it.joinedFrom = before; it.joinedTo = joined; }
-  renderJoin();
+  renderJoin(); flashChanges(before, joined);
   toast(`Lines joined. Click Undo join, or press ${/Mac/.test(navigator.platform) ? "⌘" : "Ctrl"} + Z`);
 };
 function applySize() {
@@ -2970,6 +3360,7 @@ function rerun(it) {
   if (it.status === "busy" || it.status === "queued") return;   // already being read
   it.langs = [...selected]; it.engine = engine;
   it.detected = null; it.detect = false; it.reusedLangs = false; it.autoLocal = false; it.autoGoogle = false; it.localSkipped = false; it.langVer = langVer;
+  it.quran = undefined;
   enqueue(it); render();
 }
 // The mode that read (or is reading) the image on screen; with no image, the mode new images start in.
@@ -3118,6 +3509,9 @@ el.settingsBtn.onclick = () => shownEngine() === "local" ? openLocal() : openGoo
 const gd = { dlg: $("google-dlg"), form: $("google-form"), key: $("g-key"), auto: $("g-auto"), err: $("g-err"), forget: $("g-forget"), cancel: $("g-cancel") };
 function openGoogle() {
   gd.key.value = google.key; gd.auto.checked = google.auto; gd.err.textContent = ""; gd.forget.hidden = !google.key;
+  $("g-use").innerHTML = `<b>${gUse.label()}</b> in this browser. Pages read on other devices with the same key aren't counted here.
+    <a href="https://console.cloud.google.com/apis/api/vision.googleapis.com/metrics" target="_blank" rel="noopener">See Google's count</a>
+    (all devices; pick your project at the top if asked).`;
   gd.dlg.showModal(); gd.key.focus();
 }
 gd.cancel.onclick = () => { pendingRerun = null; gd.dlg.close(); };
@@ -3209,6 +3603,7 @@ renderEngine();
 applySize();
 render();
 syncAllSegs(true);
+restoreSaved();   // bring back the images and text from the last visit
 
 // Expose for testing only.
 window.__texiq = { addImages };

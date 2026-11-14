@@ -2756,6 +2756,7 @@ function render() {
   renderTray();
   renderOutput();
   renderProgress();
+  renderEngine();   // the mode switch follows the image on screen
   layoutStage();
 }
 
@@ -2971,10 +2972,17 @@ function rerun(it) {
   it.detected = null; it.detect = false; it.reusedLangs = false; it.autoLocal = false; it.autoGoogle = false; it.localSkipped = false; it.langVer = langVer;
   enqueue(it); render();
 }
+// The mode that read (or is reading) the image on screen; with no image, the mode new images start in.
+// Auto-detect can send a page to Local AI or Google while Fast is the starting mode, so the switch follows the page.
+function shownEngine() {
+  const it = active();
+  return it && it.engine && it.source !== "pdf-text" && it.status !== "err" ? it.engine : engine;
+}
 function renderEngine() {
-  el.engFast.setAttribute("aria-pressed", engine === "fast");
-  el.engLocal.setAttribute("aria-pressed", engine === "local");
-  el.engGoogle.setAttribute("aria-pressed", engine === "google");
+  const shown = shownEngine();
+  el.engFast.setAttribute("aria-pressed", shown === "fast");
+  el.engLocal.setAttribute("aria-pressed", shown === "local");
+  el.engGoogle.setAttribute("aria-pressed", shown === "google");
   el.langLbl.textContent = engine === "google" ? "Languages (hint)" : engine === "local" ? "Reads" : "Text in image";
   const routes = [local.auto && local.ready && "Arabic pages go to Local AI", google.auto && google.key && "Indian-language pages go to Google"].filter(Boolean);
   el.langNote.textContent = engine === "google" ? "Optional: Google detects languages itself."
@@ -3086,7 +3094,15 @@ ld.form.addEventListener("submit", () => {
   toast("Local AI on");
   if (pendingRerun) { const it = pendingRerun; pendingRerun = null; rerun(it); }
 });
-el.engLocal.onclick = () => setEngine("local");
+// Picking a mode makes it the starting mode for new images, and reads the image on screen again with it
+// (unless that image was already read in this mode).
+function pickEngine(next) {
+  const it = active();
+  const reread = !!it && (it.status === "done" || it.status === "err") && it.source !== "pdf-text" && it.engine !== next;
+  if (!setEngine(next)) { if (reread) pendingRerun = it; return; }
+  if (reread) rerun(it); else renderEngine();
+}
+el.engLocal.onclick = () => pickEngine("local");
 // Quietly check at start-up, so auto-routing of Arabic pages works without opening the dialog.
 if (LOCAL_ENABLED) {
   checkLocal().then(() => { if (engine === "local" && !local.ready) { engine = "fast"; store.set("engine", "fast"); } renderEngine(); });
@@ -3094,9 +3110,9 @@ if (LOCAL_ENABLED) {
   el.engLocal.hidden = true;                 // web edition: no Local AI button, and no requests to the visitor's computer
   if (engine === "local") engine = "fast";
 }
-el.engFast.onclick = () => setEngine("fast");
-// Settings of the current mode; in Fast mode, Google's (it holds the "send Indian-language pages to Google" option).
-el.settingsBtn.onclick = () => engine === "local" ? openLocal() : openGoogle();
+el.engFast.onclick = () => pickEngine("fast");
+// Settings of the mode shown; in Fast mode, Google's (it holds the "send Indian-language pages to Google" option).
+el.settingsBtn.onclick = () => shownEngine() === "local" ? openLocal() : openGoogle();
 
 /* Google Vision settings */
 const gd = { dlg: $("google-dlg"), form: $("google-form"), key: $("g-key"), auto: $("g-auto"), err: $("g-err"), forget: $("g-forget"), cancel: $("g-cancel") };
@@ -3119,7 +3135,7 @@ gd.form.addEventListener("submit", e => {
   toast("Google Vision on");
   if (pendingRerun) { const it = pendingRerun; pendingRerun = null; rerun(it); }
 });
-el.engGoogle.onclick = () => setEngine("google");
+el.engGoogle.onclick = () => pickEngine("google");
 
 /* ---------------- Appearance & motion ---------------- */
 // Light / dark toggle. Until it is first clicked, the page follows the device ("auto");

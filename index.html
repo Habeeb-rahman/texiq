@@ -1891,27 +1891,82 @@ async function runGoogle(item) {
       const flush = () => { if (cur && cur.words.length) { cur.bbox = [Math.min(...cur.words.map(w => w.bbox[0])), Math.min(...cur.words.map(w => w.bbox[1])), Math.max(...cur.words.map(w => w.bbox[2])), Math.max(...cur.words.map(w => w.bbox[3]))]; lines.push(cur); } cur = null; };
       for (const word of para.words || []) {
         let text = "", brk = null;
+        const syms = [];
         for (const s of word.symbols || []) {
           text += s.text;
           const t = s.property?.detectedBreak?.type;
+          syms.push({ t: s.text + (t === "HYPHEN" ? "-" : ""), b: box(s.boundingBox?.vertices) });
           if (t === "HYPHEN") text += "-";
           if (t) brk = t;
         }
         if (!cur) { cur = { words: [] }; pendingSpace = false; }
         const conf = Math.round((word.confidence ?? 1) * 100);
         confs.push([conf, text.length]);
-        cur.words.push({ text, conf, bbox: box(word.boundingBox?.vertices), pre: cur.words.length && pendingSpace ? " " : "" });
+        cur.words.push({ text, conf, bbox: box(word.boundingBox?.vertices), pre: cur.words.length && pendingSpace ? " " : "", syms });
         pendingSpace = brk === "SPACE" || brk === "SURE_SPACE";
         if (brk === "EOL_SURE_SPACE" || brk === "LINE_BREAK" || brk === "HYPHEN") flush();
       }
       flush();
     }
   }
-  item.lines = lines.filter((l, i, a) => !l.gap || (i > 0 && i < a.length - 1));
+  // Newspapers and magazines: Google sometimes reads across a narrow gutter, gluing the end of a line in
+  // one column onto the line beside it. When the page has two columns, rebuild the lines per column.
+  const cols = findColumns(c);
+  const split = cols && splitGoogleColumns(lines, y => (cols.A + cols.B * y * k) / k, item.langs.some(l => l === "ara" || l === "urd"));
+  item.columns = split ? 2 : 0;
+  item.lines = (split || lines).filter((l, i, a) => !l.gap || (i > 0 && i < a.length - 1 && !a[i - 1].gap));
+  item.lines.forEach(l => l.words?.forEach(w => delete w.syms));
   item.text = linesToText(item.lines);
   const tot = confs.reduce((a, [, n]) => a + n, 0) || 1;
   item.conf = Math.round(confs.reduce((a, [cf, n]) => a + cf * n, 0) / tot);
   item.blocks = item.lines.filter(l => l.gap).length + 1;
+}
+
+// Rebuild Google's lines for a two-column page. gx(y) is the gutter's x at height y (original pixels).
+// Headings (clearly taller text) keep Google's own lines; body words go to the column they sit in,
+// splitting a word letter by letter if Google glued two columns together. Returns null if it doesn't fit.
+function splitGoogleColumns(lines, gx, rtl) {
+  const body = lines.filter(l => !l.gap);
+  const words = body.flatMap(l => l.words);
+  if (words.length < 20) return null;
+  const hOf = b => b[3] - b[1], mid = a => [...a].sort((p, q) => p - q)[a.length >> 1];
+  const mh = mid(words.map(w => hOf(w.bbox)));
+  const bboxOf = bs => [Math.min(...bs.map(b => b[0])), Math.min(...bs.map(b => b[1])), Math.max(...bs.map(b => b[2])), Math.max(...bs.map(b => b[3]))];
+  const heads = [], pieces = [];
+  for (const L of body) {
+    if (mid(L.words.map(w => hOf(w.bbox))) > mh * 1.6) { heads.push(L); continue; }
+    for (const w of L.words) {
+      const g = gx((w.bbox[1] + w.bbox[3]) / 2);
+      if (w.bbox[2] <= g || w.bbox[0] >= g || !w.syms?.length) { pieces.push({ ...w, side: (w.bbox[0] + w.bbox[2]) / 2 < g ? 0 : 1 }); continue; }
+      [0, 1].forEach(side => {
+        const ss = w.syms.filter(s => ((s.b[0] + s.b[2]) / 2 < g ? 0 : 1) === side);
+        if (ss.length) pieces.push({ text: ss.map(s => s.t).join(""), conf: w.conf, bbox: bboxOf(ss.map(s => s.b)), side });
+      });
+    }
+  }
+  const sides = [0, 1].map(s => pieces.filter(p => p.side === s));
+  if (sides.some(s => s.length < 8)) return null;
+  // Lines within a column: pieces that overlap vertically by at least half their height.
+  const toLines = ps => {
+    const out = [];
+    for (const p of [...ps].sort((a, b) => (a.bbox[1] + a.bbox[3]) - (b.bbox[1] + b.bbox[3]))) {
+      const L = out.find(l => Math.min(l.bbox[3], p.bbox[3]) - Math.max(l.bbox[1], p.bbox[1]) > 0.5 * Math.min(hOf(l.bbox), hOf(p.bbox)));
+      if (L) { L.words.push(p); L.bbox = bboxOf([L.bbox, p.bbox]); } else out.push({ words: [p], bbox: p.bbox });
+    }
+    out.sort((a, b) => a.bbox[1] - b.bbox[1]);
+    const res = [], pitches = out.slice(1).map((l, i) => l.bbox[1] - out[i].bbox[1]), pitch = pitches.length ? mid(pitches) : mh * 1.5;
+    out.forEach((l, i) => {
+      if (i && l.bbox[1] - out[i - 1].bbox[1] > pitch * 1.8) res.push({ gap: true });   // paragraph or caption break
+      l.words.sort((a, b) => rtl ? b.bbox[0] - a.bbox[0] : a.bbox[0] - b.bbox[0]);
+      l.words = l.words.map((w, j) => ({ text: w.text, conf: w.conf, bbox: w.bbox, pre: j && !/^[.,;:!?)\]”’%]/.test(w.text) ? " " : "" }));
+      res.push(l);
+    });
+    return res;
+  };
+  const top = Math.min(...pieces.map(p => p.bbox[1]));
+  const before = heads.filter(h => h.bbox[1] < top), after = heads.filter(h => h.bbox[1] >= top);
+  const groups = [before, ...(rtl ? [sides[1], sides[0]] : sides).map(toLines), after].filter(g => g.length);
+  return groups.flatMap((g, i) => i ? [{ gap: true }, ...g] : g);
 }
 
 async function runOCR(item) {
@@ -2591,7 +2646,7 @@ function renderOutputText() {
   el.status.textContent = it.source === "pdf-text"
     ? `${pg}Text taken from the PDF itself · no OCR needed${/�/.test(it.text) ? " · � marks characters the PDF doesn't define" : ""}`
     : isGoogle ? pg + how + (it.text
-      ? `Read by Google Cloud Vision · ${it.conf}% confidence${it.blocks > 1 ? ` · ${it.blocks} sections` : ""}${it.autoGoogle ? ` · ${langLabel(it.langs)} detected` : ""}`
+      ? `Read by Google Cloud Vision · ${it.conf}% confidence${it.columns > 1 ? " · 2 columns read separately" : it.blocks > 1 ? ` · ${it.blocks} sections` : ""}${it.autoGoogle ? ` · ${langLabel(it.langs)} detected` : ""}`
       : "Google found no text in this image.")
     : pg + how + (!it.text
       ? (isAi ? "The AI found no text in this image." : `No text found as ${langLabel(it.langs)}.`)

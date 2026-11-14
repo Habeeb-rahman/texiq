@@ -1153,33 +1153,50 @@ const active = () => items.find(i => i.id === activeId);
 
 /* ---------------- Saved session: images and their text survive a reload or a closed tab ----------------
    Kept in this browser only (IndexedDB), like the settings. Removing an image or "Clear all" removes it here too. */
+/* Each image gets a permanent random `key` (the record's key), separate from the per-tab `id`. No tab ever
+   clears the store: a tab writes the images it shows and deletes only the ones it removed itself, so two open
+   Texiq tabs can't wipe each other's work. */
 var savedDb = null, savedTimer = 0, savedWarned = false;
-const savedSig = new Map();   // id -> what was last written, so unchanged pages aren't rewritten
-const SAVE_SKIP = new Set(["url", "group", "streaming", "progress", "stage", "indet"]);
+const savedSig = new Map();   // key -> what was last written, so unchanged pages aren't rewritten
+const SAVE_SKIP = new Set(["id", "url", "group", "streaming", "progress", "stage", "indet"]);
+const newKey = () => crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
 function savedOpen() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open("texiq", 1);
-    r.onupgradeneeded = () => r.result.createObjectStore("items", { keyPath: "id" });
-    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    const r = indexedDB.open("texiq", 2);
+    r.onupgradeneeded = e => {
+      const db = r.result;
+      if (e.oldVersion < 2 && db.objectStoreNames.contains("items")) db.deleteObjectStore("items");   // v1 keyed by the per-tab id
+      db.createObjectStore("items", { keyPath: "key" });
+    };
+    r.onsuccess = () => { const db = r.result; db.onversionchange = () => db.close(); res(db); };   // let a newer Texiq tab upgrade
+    r.onerror = () => rej(r.error);
   });
 }
-const sigOf = (it, i) => [i, it.status, it.ver, it.edited, it.blob?.size, (it.text || "").length, it.text?.slice(-40)].join("|");
+// A page still being read is saved once as "waiting": its streaming text would otherwise rewrite the record
+// (image included) every 0.7 s.
+// (Order isn't part of it: removing one image mustn't rewrite every image after it. Records keep the order
+// they were written with, ties broken by save time.)
+const sigOf = it => it.status !== "done" && it.status !== "err" ? `pending|${it.blob?.size}`
+  : [it.status, it.ver, it.edited, it.blob?.size, it.original?.size, (it.text || "").length, it.text?.slice(-40), it.quran === undefined ? "" : it.quran ? it.quran.range : "-"].join("|");
 function saveSoon() { if (savedDb) { clearTimeout(savedTimer); savedTimer = setTimeout(saveNow, 700); } }
 function saveNow() {
   savedTimer = 0;
   if (!savedDb) return;
   try {
     const tx = savedDb.transaction("items", "readwrite"), st = tx.objectStore("items");
-    const ids = new Set(items.map(i => i.id));
-    for (const id of [...savedSig.keys()]) if (!ids.has(id)) { st.delete(id); savedSig.delete(id); }
+    items.forEach(it => { if (!it.key) it.key = newKey(); });
+    const keys = new Set(items.map(i => i.key));
+    // Only images this tab saved and has since removed are deleted.
+    for (const k of [...savedSig.keys()]) if (!keys.has(k)) { st.delete(k); savedSig.delete(k); }
+    const now = Date.now();
     items.forEach((it, i) => {
-      const s = sigOf(it, i);
-      if (savedSig.get(it.id) === s) return;
-      const rec = { order: i, groupName: it.group?.name || null, groupLangs: it.group?.langs || null };
+      const s = sigOf(it);
+      if (savedSig.get(it.key) === s) return;
+      const rec = { order: i, saved: now, groupName: it.group?.name || null, groupLangs: it.group?.langs || null };
       for (const k in it) if (!SAVE_SKIP.has(k)) rec[k] = it[k];
       // A page still being read is saved as waiting, and read again after a reload.
-      if (rec.status !== "done" && rec.status !== "err") rec.status = "queued";
-      st.put(rec); savedSig.set(it.id, s);
+      if (rec.status !== "done" && rec.status !== "err") Object.assign(rec, { status: "queued", text: "", lines: null });
+      st.put(rec); savedSig.set(it.key, s);
     });
     tx.onerror = () => { savedSig.clear(); if (!savedWarned) { savedWarned = true; toast("Couldn't save every image in this browser (storage may be full)."); } };
   } catch (e) { console.warn("Couldn't save the session", e); }
@@ -1191,22 +1208,22 @@ async function restoreSaved() {
     catch { res([]); }
   });
   if (!rows.length) { saveSoon(); return; }
-  // Give restored images fresh ids (something may have been pasted already) and rewrite the store.
-  try { savedDb.transaction("items", "readwrite").objectStore("items").clear(); } catch {}
-  rows.sort((a, b) => a.order - b.order);
-  const groups = {}, restored = [];
+  rows.sort((a, b) => a.order - b.order || (a.saved || 0) - (b.saved || 0));
+  const have = new Set(items.map(i => i.key).filter(Boolean)), groups = {}, restored = [];
   for (const r of rows) {
-    if (!(r.blob instanceof Blob)) continue;
+    if (!(r.blob instanceof Blob) || have.has(r.key)) continue;
+    // Fresh per-tab id (something may have been pasted already); the permanent key stays.
     const it = { ...r, id: nextId++, url: URL.createObjectURL(r.blob) };
-    delete it.order; delete it.groupName; delete it.groupLangs;
+    delete it.order; delete it.saved; delete it.groupName; delete it.groupLangs;
     if (r.groupName) it.group = groups[r.groupName] ||= { name: r.groupName, langs: r.groupLangs };
     restored.push(it);
   }
   items.unshift(...restored);
+  restored.forEach(it => savedSig.set(it.key, sigOf(it)));   // already saved as they are
   restored.filter(it => it.status === "queued").forEach(enqueue);   // were still being read
   if (!activeId && restored.length) activeId = restored[0].id;
   render(); saveSoon();
-  toast(`Restored ${restored.length} image${restored.length === 1 ? "" : "s"} from your last visit`);
+  if (restored.length) toast(`Restored ${restored.length} image${restored.length === 1 ? "" : "s"} from your last visit`);
 }
 addEventListener("pagehide", () => { if (savedTimer) { clearTimeout(savedTimer); saveNow(); } });
 
@@ -1269,7 +1286,9 @@ async function checkQuran(it) {
   // The reading's words, remembering which line each came from.
   const rows = it.text.split("\n"), toks = [];
   rows.forEach((row, r) => row.split(/\s+/).forEach(w => { const n = normAr(w); if (n.length) toks.push({ w, n, r }); }));
-  if (toks.length < 6) { it.quran = null; return; }
+  // A mushaf page has ~100–250 words; much longer texts aren't a single Quran page, and the word alignment
+  // below grows with length × length (would freeze the page on a long PDF).
+  if (toks.length < 6 || toks.length > 900) { it.quran = null; return; }
   // Where in the Quran: vote with word triples.
   const votes = new Map();
   for (let i = 0; i + 2 < toks.length; i++) {
@@ -1412,12 +1431,13 @@ function replaceImage(it, blob, what) {
   readAgain(it); flashImage();
   toast(`${what}. Reading again…`);
 }
-const toPng = c => new Promise(r => c.toBlob(r, "image/png"));
+// Photos stay JPEG after a crop or turn (a 12 MP photo as PNG is ~20 MB in the saved session); screenshots stay PNG.
+const toImage = (c, like) => new Promise(r => /jpe?g|heic|heif|webp/i.test(like?.type || "") ? c.toBlob(r, "image/jpeg", 0.95) : c.toBlob(r, "image/png"));
 async function rotateImage() {
   const it = active(); if (!it || isBusy(it)) return;
   const bmp = await createImageBitmap(it.blob), c = newCanvas(bmp.height, bmp.width), x = c.getContext("2d");
   x.translate(c.width, 0); x.rotate(Math.PI / 2); x.drawImage(bmp, 0, 0);
-  replaceImage(it, await toPng(c), "Rotated");
+  replaceImage(it, await toImage(c, it.blob), "Rotated");
 }
 function endCrop() {
   if (!crop) return;
@@ -1465,7 +1485,7 @@ async function applyCrop() {
   const x0 = Math.round(r[0] * W), y0 = Math.round(r[1] * H), w = Math.max(1, Math.round(r[2] * W) - x0), h = Math.max(1, Math.round(r[3] * H) - y0);
   const c = newCanvas(w, h), x = c.getContext("2d");
   x.fillStyle = "#fff"; x.fillRect(0, 0, w, h); x.drawImage(bmp, x0, y0, w, h, 0, 0, w, h);
-  replaceImage(it, await toPng(c), "Cropped");
+  replaceImage(it, await toImage(c, it.blob), "Cropped");
 }
 $("rotate-btn").onclick = rotateImage;
 $("crop-btn").onclick = startCrop;
@@ -1623,9 +1643,16 @@ function skewAngle(src) {
 function findColumns(src) {
   const { c, k } = small(src, 700), w = c.width, h = c.height, g = grayOf(c), t = otsu(g);
   if (w < 200) return null;
-  // A strip only a few lines tall (a cropped line, a caption) has no columns: the gap between two words
-  // would otherwise look like a gutter.
-  if (h < w * 0.35) return null;
+  // Columns need several lines: in a strip of one or two lines (a cropped line, a caption) the gap between two
+  // words would look like a gutter. Count text lines rather than using the shape, so a short-but-wide crop of
+  // a two-column page still splits.
+  {
+    const inkRow = y => { let n = 0; for (let x = 0; x < w; x++) if (g[y * w + x] < t) n++; return n > w * 0.01; };
+    let lines = 0, run = 0;
+    for (let y = 0; y < h; y++) { if (inkRow(y)) run++; else { if (run >= 2) lines++; run = 0; } }
+    if (run >= 2) lines++;
+    if (lines < 3) return null;
+  }
   const ink = new Float32Array(w);
   // Ignore the top and bottom fifth: headings, photos and footers often span both columns.
   for (let y = Math.round(h * 0.2); y < h * 0.8; y++) for (let x = 0; x < w; x++) if (g[y * w + x] < t) ink[x]++;
@@ -2379,6 +2406,8 @@ async function runOCR(item) {
     if (found && !found.some(l => l === "ara" || l === "urd")) {
       if (item.group) item.group.langs = found;
       item.engine = "fast"; item.localSkipped = true; item.detect = false;
+      // Indian-language pages go to Google when that's switched on, as they would in Fast mode.
+      if (found.some(l => INDIC.includes(l)) && google.auto && google.key) { item.engine = "google"; item.autoGoogle = true; item.localSkipped = false; }
       item.langs = found; item.detected = found; item.langVer = langVer;
       selected = [...found]; store.set("langs", selected); renderTokens();
       return runOCR(item);
@@ -2713,7 +2742,7 @@ function pageQuality(text) {
   return "text";
 }
 
-async function addPdf(file) {
+async function addPdf(file, eng = engine) {
   let lib;
   try { lib = await loadPdfJs(); } catch { toast("Couldn't load the PDF reader. Check your connection."); return; }
   let doc;
@@ -2751,13 +2780,14 @@ async function addPdf(file) {
       const item = {
         id: nextId++, blob, url: URL.createObjectURL(blob), name: `${file.name} · page ${n}`,
         page: n, pages: N, group, source: "pdf-" + quality, dims: `${canvas.width} × ${canvas.height}`,
-        langs: [...selected], engine, text: "", conf: null, langVer,
+        langs: [...selected], engine: eng, text: "", conf: null, langVer,
       };
       items.push(item);
       if (quality === "text") {
         Object.assign(item, { status: "done", text, lines, conf: 100, ver: String(Date.now()) });
+        checkQuran(item);   // Quran PDFs with a text layer get the check too (they never go through the reading queue)
       } else {
-        item.detect = el.autoDetect.checked && engine === "fast";
+        item.detect = el.autoDetect.checked && eng === "fast";
         enqueue(item);
       }
       if (!firstSet) { activeId = item.id; firstSet = true; }
@@ -2805,12 +2835,17 @@ async function heicImage(file) {
 // Natural order, so "page2" comes before "page10" and Copy all reads in sequence.
 const byName = (a, b) => (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" });
 
-function newItem(blob, name, batchName) {
+function newItem(blob, name, batchName, eng = engine) {
   return { id: nextId++, blob, url: URL.createObjectURL(blob), name, batchName: batchName || name,
-    langs: [...selected], engine, text: "", conf: null, detect: el.autoDetect.checked && engine === "fast", langVer };
+    langs: [...selected], engine: eng, text: "", conf: null, detect: el.autoDetect.checked && eng === "fast", langVer };
 }
+// Folders ("Choose folder", or a folder dropped on the page) are read with Local AI (Nuqta) first, when it's set up.
+// Pages that turn out not to be Arabic are read with Fast instead (runOCR checks the script before using Nuqta).
+const folderEngine = () => LOCAL_ENABLED && local.ready ? "local" : engine;
 
-async function addImages(files) {
+async function addImages(files, opts = {}) {
+  const fromFolder = !!(opts.folder || files.fromFolder);
+  const eng = fromFolder ? folderEngine() : engine;
   const list = [...files].filter(Boolean);
   if (list.some(f => f.name)) list.sort(byName);   // pasted images have no names: keep paste order
   const pdfs = list.filter(isPdf);
@@ -2828,17 +2863,19 @@ async function addImages(files) {
     } catch (e) { console.warn("Couldn't convert", f.name, e); failed++; continue; }
     blobs.forEach((b, i) => {
       const base = f.name || "Pasted image";
-      const item = newItem(b, blobs.length > 1 ? `${base} · page ${i + 1}` : base, base);
+      const item = newItem(b, blobs.length > 1 ? `${base} · page ${i + 1}` : base, base, eng);
       items.push(item); enqueue(item);
       if (!first) { first = item; activeId = item.id; }
     });
     render();   // show each file as it arrives, even in big batches
   }
   if (first) render();
-  for (const f of pdfs) await addPdf(f);
+  for (const f of pdfs) await addPdf(f, eng);
   const total = imgs.length + pdfs.length;
-  if (total > 1 || skipped || failed) {
+  if (total > 1 || skipped || failed || fromFolder) {
     const parts = [`Added ${total} file${total === 1 ? "" : "s"}`];
+    if (fromFolder && eng === "local") parts.push("reading with Local AI (Nuqta); pages that aren't Arabic go to Fast");
+    else if (fromFolder && LOCAL_ENABLED && !local.ready) parts.push("set up Local AI to read folders with Nuqta");
     if (skipped) parts.push(`${skipped} skipped (not an image or PDF)`);
     if (failed) parts.push(`${failed} couldn't be opened`);
     toast(parts.join(" · "));
@@ -2860,6 +2897,7 @@ async function filesFromDrop(dt) {
     }
   };
   for (const e of entries) await walk(e);
+  out.fromFolder = true;   // a dropped folder is read like "Choose folder"
   return out;
 }
 
@@ -2891,7 +2929,7 @@ el.cameraBtn.onclick = () => el.camera.click();
 el.file.onchange = () => { addImages(el.file.files); el.file.value = ""; };
 const folderIn = $("folder");
 $("folder-btn").onclick = () => folderIn.click();
-folderIn.onchange = () => { addImages(folderIn.files); folderIn.value = ""; };
+folderIn.onchange = () => { addImages(folderIn.files, { folder: true }); folderIn.value = ""; };
 el.camera.onchange = () => { addImages(el.camera.files); el.camera.value = ""; };
 
 let dragDepth = 0;
@@ -3053,7 +3091,7 @@ function renderOutputText() {
           it.cleanup?.length ? ` · photo ${it.cleanup.join(", ")}` : ""}${
           it.columns > 1 ? " · 2 columns read separately" : ""}${
           it.dropped ? ` · ${it.dropped} stray line${it.dropped === 1 ? "" : "s"} removed` : ""}`);
-  if (it.source === "pdf-text") { setActions(!!el.output.value.trim()); updateCounts(); return; }
+  if (it.source === "pdf-text") { if (it.quran) showQuranNotice(it); setActions(!!el.output.value.trim()); updateCounts(); return; }
 
   const ENGINE_NAME = { fast: "Fast", local: "Local AI (Nuqta)", google: "Google Vision" };
   const engineChanged = it.engine !== engine && !it.autoLocal && !it.autoGoogle && !it.localSkipped;

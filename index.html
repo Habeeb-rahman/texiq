@@ -1839,11 +1839,16 @@ async function runGoogle(item) {
   item.indet = true; item.stage = "Sending the image to Google";
   if (item.id === activeId) renderProgress();
   // Vision takes up to 20 MB per request; large photos are scaled to 4,000 px on the long side.
+  // Small images are enlarged (up to 3×, to about 2,000 px): Google reads small print, especially
+  // Indian scripts with their fine vowel signs, much better when each letter has more pixels.
   const bmp = await createImageBitmap(item.blob);
-  const W = bmp.width, H = bmp.height, k = Math.min(1, 4000 / Math.max(W, H));
-  const c = newCanvas(W * k, H * k), x = c.getContext("2d");
+  const W = bmp.width, H = bmp.height, long = Math.max(W, H);
+  const k0 = long > 4000 ? 4000 / long : long < 2000 ? Math.min(3, 2000 / long) : 1;
+  const c = newCanvas(Math.round(W * k0), Math.round(H * k0)), x = c.getContext("2d");
+  const k = c.width / W;   // the scale actually used, so Google's boxes map back to the original exactly
+  x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
   x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.drawImage(bmp, 0, 0, c.width, c.height);
-  const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.92));
+  const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.95));
   const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1]); fr.onerror = rej; fr.readAsDataURL(blob); });
   item.dims = `${W} × ${H}`;
   const hints = item.langs.map(l => BCP47[l]).filter(Boolean);

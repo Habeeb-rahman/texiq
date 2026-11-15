@@ -959,6 +959,10 @@ dialog select, dialog input[type=text], dialog input[type=password] { width: 100
       <h2 id="img-h">Image</h2>
       <span class="meta" id="img-meta"></span>
       <div class="spacer"></div>
+      <button class="btn ghost" id="reread-btn" title="Read this image again with its mode and your current settings (for example after changing the Local AI model)" hidden>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/></svg>
+        <span class="lbl-wide">Read again</span>
+      </button>
       <button class="btn ghost" id="orig-btn" title="Go back to the image as you added it, and read it again" hidden>Original</button>
       <button class="btn ghost icon" id="rotate-btn" title="Rotate right, then read again" aria-label="Rotate image" hidden>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
@@ -1411,7 +1415,8 @@ const isBusy = it => it.status === "busy" || it.status === "queued";
 function renderEditTools() {
   const it = active(), on = !!it && !it.error?.startsWith?.("Couldn't open");
   const can = on && !isBusy(it);
-  ["rotate-btn", "crop-btn"].forEach(id => { $(id).hidden = !on; $(id).disabled = !can; });
+  ["rotate-btn", "crop-btn", "reread-btn"].forEach(id => { $(id).hidden = !on; $(id).disabled = !can; });
+  if (on && it.source === "pdf-text") $("reread-btn").hidden = true;   // the PDF's own text: nothing to read again
   $("orig-btn").hidden = !it?.original; $("orig-btn").disabled = !can;
   if (crop && (crop.it !== it || !can)) endCrop();
 }
@@ -1424,6 +1429,22 @@ function readAgain(it) {
   });
   enqueue(it); render();
 }
+// Read the image again with the mode that read it and the current settings (Local AI model, output, layout;
+// Google key; languages). Auto-routing isn't repeated: the page stays in its mode.
+function rescan(it) {
+  if (!it || isBusy(it)) return;
+  let eng = it.engine || engine;
+  if (eng === "local" && !local.ready) { pendingRerun = it; openLocal(); return; }
+  if (eng === "google" && !google.key) { pendingRerun = it; openGoogle(); return; }
+  if (it.source === "pdf-text") it.source = "pdf-scan";
+  Object.assign(it, {
+    engine: eng, text: "", lines: null, conf: null, error: null, edited: false, detect: false, reusedLangs: false,
+    localSkipped: false, joinedFrom: null, joinedTo: null, quran: undefined, langVer,
+  });
+  enqueue(it); render();
+  toast(`Reading again with ${eng === "local" ? modelShort(local.model) : eng === "google" ? "Google Vision" : "Fast"}…`);
+}
+$("reread-btn").onclick = () => rescan(active());
 function replaceImage(it, blob, what) {
   if (!it.original) it.original = it.blob;
   URL.revokeObjectURL(it.url);
@@ -3215,6 +3236,15 @@ function renderOutputText() {
   // Nuqta for Arabic; Google Vision for Indian languages and everything else
   const better = arabic && LOCAL_ENABLED ? "local" : "google";
   let msg = "", target = null;
+  // Local AI settings changed since this page was read (model, output or layout): offer to read it again.
+  const localChanged = isAi && it.status === "done" && it.localModel && (it.localModel !== local.model || it.localMode !== local.mode);
+  if (localChanged && !engineChanged) {
+    el.notice.hidden = false;
+    el.notice.innerHTML = `<span>Read with ${esc(modelShort(it.localModel))}${it.localMode !== local.mode ? ` (${esc(NUQTA_MODE_LABEL[it.localMode] || it.localMode)})` : ""}. Local AI is now set to ${esc(modelShort(local.model))}${it.localMode !== local.mode ? ` (${esc(NUQTA_MODE_LABEL[local.mode] || local.mode)})` : ""}.</span><button id="rescan-now">Read again with ${esc(modelShort(local.model))}</button>`;
+    $("rescan-now").onclick = () => rescan(it);
+    setActions(!!el.output.value.trim()); updateCounts();
+    return;
+  }
   if (engineChanged) {
     msg = `This image was read in ${ENGINE_NAME[it.engine]} mode.`; target = engine;
   } else if (langsChanged) {

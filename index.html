@@ -778,6 +778,29 @@ body { font-optical-sizing: auto; }
   .pick .btn.lg { height: 40px; }
 }
 @media (prefers-reduced-motion: reduce) { .paste-glass:active { transform: none; } }
+/* Tablets and phones: the start area must always fit its box.
+   - "safe center" + scrolling: if the content is taller than the box it starts at the top instead of spilling past both edges.
+   - Touch screens add "Take photo", so the choices wrap onto two rows instead of running past the box.
+   - Single-column layouts (iPad portrait, phones in landscape) give the empty image pane enough room. */
+.dropzone { justify-content: safe center; overflow-y: auto; overscroll-behavior: contain; }
+.pick { grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+.pick .btn.lg { min-width: 0; padding: 0 10px; }
+@media (pointer: coarse) { .drop-actions { width: min(100%, 420px); } }
+@media (max-width: 860px) and (min-width: 561px) {
+  .workspace:has(#dropzone:not([hidden])) { grid-template-rows: 520px minmax(430px, 1fr); }
+}
+@media (max-width: 560px) {   /* phones: room for the whole "Your text will appear here" card */
+  .workspace:has(#dropzone:not([hidden])) { grid-template-rows: minmax(300px, 45vh) minmax(420px, 1fr); }
+}
+@media (max-height: 560px) and (max-width: 1024px) {   /* phones and small tablets in landscape */
+  .dropzone > p, .or-line, .dropzone .fine, .dropzone .tile { display: none !important; }
+  .dropzone { gap: 10px; padding: 14px; }
+  .dropzone h3 { font-size: 21px; }
+  .paste-glass { height: 48px; }
+}
+@media (max-height: 560px) and (max-width: 860px) {
+  .workspace:has(#dropzone:not([hidden])) { grid-template-rows: 292px minmax(430px, 1fr); }
+}
 body.dragging .dropzone { border-color: var(--accent); background: var(--accent-soft); transform: scale(.985); }
 body.dragging .dropzone .tile { transform: translateY(-6px) scale(1.06); }
 body.dragging .preview-drop { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }

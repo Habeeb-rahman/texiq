@@ -3790,10 +3790,38 @@ function showVoiceLive(text) {
   live.innerHTML = text ? esc(text)
     : `<span class="hint">Listening in ${esc(byCode[voiceCode()]?.name || "")}… ${voice.start !== voice.end ? "say the right word" : "speak now"}</span>`;
 }
+// Words selected in the Review view are a selection in the review lines, not in the text box: find the same
+// characters in the text box (the review line's text, then the offset inside it).
+function reviewSelectionRange() {
+  const sel = getSelection();
+  if (!sel.rangeCount || sel.isCollapsed) return null;
+  const r = sel.getRangeAt(0);
+  if (!el.reviewBody.contains(r.startContainer) || !el.reviewBody.contains(r.endContainer)) return null;
+  const v = el.output.value;
+  const posOf = (node, off) => {
+    const line = (node.nodeType === 1 ? node : node.parentElement).closest(".rl");
+    if (!line || line.classList.contains("gap")) return -1;
+    const pre = document.createRange(); pre.setStart(line, 0); pre.setEnd(node, off);
+    const inLine = pre.toString().length, text = line.textContent;
+    // Which copy of this line's text (identical lines repeat in poems and lists)
+    const lines = [...el.reviewBody.querySelectorAll(".rl:not(.gap)")];
+    const nth = lines.slice(0, lines.indexOf(line)).filter(x => x.textContent === text).length;
+    let at = -1;
+    for (let k = 0; k <= nth; k++) { at = v.indexOf(text, at + 1); if (at < 0) return -1; }
+    return at + inLine;
+  };
+  const a = posOf(r.startContainer, r.startOffset), b = posOf(r.endContainer, r.endOffset);
+  if (a >= 0 && b >= a) return [a, b];
+  // The text was edited since: look for the selected words themselves
+  const want = sel.toString().trim(), at = want ? v.indexOf(want) : -1;
+  return at >= 0 ? [at, at + want.length] : null;
+}
 function startVoice() {
   const it = active();
   if (!it || it.status !== "done" || voice.on) return;
+  const fromReview = view === "review" ? reviewSelectionRange() : null;
   if (view === "review") setView("edit");   // the text box must be visible to change it
+  if (fromReview) el.output.setSelectionRange(...fromReview);
   voice.start = el.output.selectionStart; voice.end = el.output.selectionEnd; voice.itemId = it.id;
   const rec = new SpeechRec();
   rec.lang = VOICE_LOCALE[voiceCode()] || "en-US";

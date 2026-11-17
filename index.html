@@ -892,6 +892,15 @@ dialog input:focus, dialog select:focus { outline: 3px solid var(--focus); outli
   75%  { background: rgba(52, 199, 89, .26); box-shadow: 0 0 0 0 rgba(52, 199, 89, 0); }
   100% { background: rgba(52, 199, 89, 0);   box-shadow: 0 0 0 0 rgba(52, 199, 89, 0); }
 }
+/* Words added by Speak glow purple (the app's accent), so they can't be mistaken for Quran corrections */
+.flash-layer.spoken mark { animation-name: light-up-voice; animation-duration: 3.6s; }
+@keyframes light-up-voice {
+  0%   { background: rgba(124, 92, 246, 0);   box-shadow: 0 0 0 0 rgba(124, 92, 246, 0); }
+  10%  { background: rgba(124, 92, 246, .45); box-shadow: 0 0 16px 4px rgba(124, 92, 246, .55); }
+  30%  { background: rgba(124, 92, 246, .3);  box-shadow: 0 0 4px 0 rgba(124, 92, 246, .3); }
+  75%  { background: rgba(124, 92, 246, .22); box-shadow: 0 0 0 0 rgba(124, 92, 246, 0); }
+  100% { background: rgba(124, 92, 246, 0);   box-shadow: 0 0 0 0 rgba(124, 92, 246, 0); }
+}
 /* The image glows green when it was cropped, rotated or restored */
 .stage img.lit { animation: img-lit 1.8s var(--ease-out) both; }
 @keyframes img-lit {
@@ -1609,13 +1618,15 @@ function changedRanges(before, after) {
   for (const line of after.split("\n")) { if (line.trim() && !old.has(line.trim())) out.push([pos, pos + line.length]); pos += line.length + 1; }
   return { ranges: out, whole: true };
 }
-function flashChanges(before, after) {
+// opts.ranges: mark exactly these [start, end) ranges of `after` (Speak knows where its words went);
+// opts.kind: an extra class for a different colour ("spoken": purple).
+function flashChanges(before, after, opts = {}) {
   document.querySelector(".flash-layer")?.remove(); clearTimeout(flashTimer);
-  if (before === after) return 0;
-  const { ranges, whole } = changedRanges(before, after);
+  if (before === after && !opts.ranges) return 0;   // Speak saying the selected word again still lights it up
+  const { ranges, whole } = opts.ranges ? { ranges: opts.ranges, whole: false } : changedRanges(before, after);
   if (!ranges.length) return 0;
   const ta = el.output, cs = getComputedStyle(ta), layer = document.createElement("div");
-  layer.className = "flash-layer" + (whole ? " whole" : "");
+  layer.className = "flash-layer" + (whole ? " whole" : "") + (opts.kind ? " " + opts.kind : "");
   layer.dir = ta.dir || "auto";
   for (const p of ["font", "letterSpacing", "wordSpacing", "lineHeight", "textAlign", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "tabSize"]) layer.style[p] = cs[p];
   Object.assign(layer.style, { top: ta.offsetTop + "px", left: ta.offsetLeft + "px", width: ta.clientWidth + "px", height: ta.clientHeight + "px" });
@@ -3868,6 +3879,11 @@ function insertSpoken(raw) {
   if (!ok) { el.output.setRangeText(t, a, b, "end"); el.output.dispatchEvent(new Event("input")); }
   voice.start = voice.end = a + t.length;   // the next phrase follows this one
   el.output.setSelectionRange(voice.start, voice.end);
+  // Light up the words just added: find them where they went in (not counting the spaces added around them)
+  const words = t.trim(), now = el.output.value;
+  let at = now.indexOf(words, Math.max(0, a - 2));
+  if (at < 0 || at > a + 2) at = a + (t.length - t.trimStart().length);
+  flashChanges(v, now, { ranges: [[at, at + words.length]], kind: "spoken" });
 }
 $("voice-btn").onclick = () => voice.on ? stopVoice() : startVoice();
 document.addEventListener("keydown", e => {

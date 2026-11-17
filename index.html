@@ -3805,7 +3805,7 @@ function showVoiceLive(text) {
 // characters in the text box (the review line's text, then the offset inside it).
 function reviewSelectionRange() {
   const sel = getSelection();
-  if (!sel.rangeCount || sel.isCollapsed) return null;
+  if (!sel.rangeCount) return null;
   const r = sel.getRangeAt(0);
   if (!el.reviewBody.contains(r.startContainer) || !el.reviewBody.contains(r.endContainer)) return null;
   const v = el.output.value;
@@ -3822,17 +3822,33 @@ function reviewSelectionRange() {
     return at + inLine;
   };
   const a = posOf(r.startContainer, r.startOffset), b = posOf(r.endContainer, r.endOffset);
+  if (sel.isCollapsed) {
+    // A click in Review is a cursor: type there. Inside a word, move to the word's end so it isn't split.
+    if (a < 0) return null;
+    let q = a;
+    while (q > 0 && q < v.length && !/\s/.test(v[q]) && !/\s/.test(v[q - 1])) q++;
+    return [q, q];
+  }
   if (a >= 0 && b >= a) return [a, b];
   // The text was edited since: look for the selected words themselves
   const want = sel.toString().trim(), at = want ? v.indexOf(want) : -1;
   return at >= 0 ? [at, at + want.length] : null;
 }
+// Where the spoken words go: the selection or cursor in whichever view is showing. Read when the Speak button is
+// pressed (pointerdown), before the click can move focus or clear a selection.
+function voiceTarget() {
+  if (view === "review") return reviewSelectionRange();
+  return [el.output.selectionStart, el.output.selectionEnd];
+}
 function startVoice() {
   const it = active();
   if (!it || it.status !== "done" || voice.on) return;
-  const fromReview = view === "review" ? reviewSelectionRange() : null;
+  const fresh = voice.pending && voice.pending.id === it.id && Date.now() - voice.pending.t < 3000;
+  const target = fresh ? voice.pending.range : voiceTarget();
+  voice.pending = null;
   if (view === "review") setView("edit");   // the text box must be visible to change it
-  if (fromReview) el.output.setSelectionRange(...fromReview);
+  if (target) el.output.setSelectionRange(target[0], target[1]);
+  else el.output.setSelectionRange(el.output.value.length, el.output.value.length);   // nowhere chosen: at the end
   voice.start = el.output.selectionStart; voice.end = el.output.selectionEnd; voice.itemId = it.id;
   const rec = new SpeechRec();
   rec.lang = VOICE_LOCALE[voiceCode()] || "en-US";
@@ -3885,6 +3901,10 @@ function insertSpoken(raw) {
   if (at < 0 || at > a + 2) at = a + (t.length - t.trimStart().length);
   flashChanges(v, now, { ranges: [[at, at + words.length]], kind: "spoken" });
 }
+$("voice-btn").addEventListener("pointerdown", () => {
+  const it = active();
+  if (!voice.on && it) voice.pending = { id: it.id, t: Date.now(), range: voiceTarget() };
+});
 $("voice-btn").onclick = () => voice.on ? stopVoice() : startVoice();
 document.addEventListener("keydown", e => {
   if ($("voice").hidden || document.querySelector("dialog[open]")) return;

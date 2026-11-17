@@ -3850,6 +3850,7 @@ function startVoice() {
   if (target) el.output.setSelectionRange(target[0], target[1]);
   else el.output.setSelectionRange(el.output.value.length, el.output.value.length);   // nowhere chosen: at the end
   voice.start = el.output.selectionStart; voice.end = el.output.selectionEnd; voice.itemId = it.id;
+  voice.placed = [voice.start, voice.end];   // where Speak last put the cursor (to notice when the user moves it)
   const rec = new SpeechRec();
   rec.lang = VOICE_LOCALE[voiceCode()] || "en-US";
   rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
@@ -3886,6 +3887,12 @@ function stopVoice() { try { voice.rec?.stop(); } catch {} }
 function insertSpoken(raw) {
   let t = raw.trim();
   if (!t || active()?.id !== voice.itemId) return;
+  // Listening keeps going between phrases. If the user clicked somewhere else or selected another word since
+  // the last phrase (in the text box, or in Review), this phrase goes there instead of after the last one.
+  const moved = view === "review" ? reviewSelectionRange() : null;
+  const cur = moved || [el.output.selectionStart, el.output.selectionEnd];
+  if (moved || (voice.placed && (cur[0] !== voice.placed[0] || cur[1] !== voice.placed[1]))) { voice.start = cur[0]; voice.end = cur[1]; }
+  if (view === "review") setView("edit");
   const v = el.output.value, a = Math.min(voice.start, v.length), b = Math.min(voice.end, v.length);
   if (a > 0 && !/\s/.test(v[a - 1])) t = " " + t;
   if (b < v.length && !/[\s.,،؛:!?؟)\]]/.test(v[b])) t += " ";
@@ -3893,8 +3900,9 @@ function insertSpoken(raw) {
   let ok = false;
   try { ok = document.execCommand("insertText", false, t); } catch {}
   if (!ok) { el.output.setRangeText(t, a, b, "end"); el.output.dispatchEvent(new Event("input")); }
-  voice.start = voice.end = a + t.length;   // the next phrase follows this one
+  voice.start = voice.end = a + t.length;   // the next phrase follows this one, unless the user moves the cursor
   el.output.setSelectionRange(voice.start, voice.end);
+  voice.placed = [voice.start, voice.end];
   // Light up the words just added: find them where they went in (not counting the spaces added around them)
   const words = t.trim(), now = el.output.value;
   let at = now.indexOf(words, Math.max(0, a - 2));

@@ -1252,8 +1252,8 @@ dialog select, dialog input[type=text], dialog input[type=password] { width: 100
         <div class="notice" id="notice" hidden></div>
         <div class="status-line" id="status" aria-live="polite"></div>
         <label for="output" class="sr">Extracted text</label>
-        <div class="voice-live" id="voice-live" dir="auto" aria-live="polite" hidden></div>
-        <textarea id="output" dir="auto" spellcheck="false" placeholder="The text from your image will appear here. You can edit it before copying."></textarea>
+        <div class="voice-live notranslate" id="voice-live" translate="no" dir="auto" aria-live="polite" hidden></div>
+        <textarea id="output" class="notranslate" translate="no" dir="auto" spellcheck="false" placeholder="The text from your image will appear here. You can edit it before copying."></textarea>
         <!-- Shown only before any image is added -->
         <div class="text-empty" id="text-empty">
           <div class="te-icon" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 11h12"/><path d="M4 16h8"/><path d="M17 14v6"/><path d="M15 14h4M15 20h4"/></svg></div>
@@ -1274,7 +1274,7 @@ dialog select, dialog input[type=text], dialog input[type=password] { width: 100
             <button class="btn" id="next-doubt" style="height:28px">Next word to check</button>
           </div>
           <div class="review-note" id="review-note" hidden>You edited this text. Review shows the original reading; switch to Edit to see your changes.</div>
-          <div class="review-body" id="review-body"></div>
+          <div class="review-body notranslate" id="review-body" translate="no"></div>
         </div>
         <div class="out-foot">
           <span id="counts">0 words · 0 characters</span>

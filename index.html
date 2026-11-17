@@ -939,6 +939,31 @@ dialog select, dialog input[type=text], dialog input[type=password] { width: 100
 .local-status.bad { background: var(--warn-soft); }
 
 /* ---------- Motion vocabulary (critically damped: no overshoot) ---------- */
+/* Voice typing: Speak button + language picker in the text pane header, live words while listening */
+.voice { display: inline-flex; align-items: center; gap: 2px; }
+.voice[hidden] { display: none; }
+#voice-lang {
+  height: 28px; max-width: 110px; padding: 0 20px 0 8px; border: 0; border-radius: 8px; background-color: var(--fill);
+  color: var(--ink-2); font: 500 12.5px/1 var(--font), var(--script), sans-serif; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 10px top 12px, right 6px top 12px; background-size: 4px 4px; background-repeat: no-repeat;
+}
+#voice-lang:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+#voice-btn[aria-pressed="true"] { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+#voice-btn[aria-pressed="true"] svg { animation: mic-pulse 1.2s ease-in-out infinite; }
+@keyframes mic-pulse { 50% { opacity: .45; } }
+.voice-live {
+  position: absolute; left: 50%; bottom: 14px; translate: -50% 0; z-index: 5; max-width: min(90%, 560px);
+  display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-radius: 980px;
+  background: var(--surface); color: var(--ink); box-shadow: var(--shadow-card), 0 0 0 1px var(--line);
+  font: 500 15px/1.35 var(--font), var(--script), sans-serif; animation: pop-in .25s var(--ease-out) both;
+}
+.voice-live[hidden] { display: none; }
+.voice-live::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); animation: mic-pulse 1.2s ease-in-out infinite; }
+.voice-live .hint { color: var(--ink-3); }
+@media (prefers-reduced-motion: reduce) { #voice-btn[aria-pressed="true"] svg, .voice-live::before { animation: none; } }
+@media (max-width: 560px) { #voice-lang { max-width: 76px; } }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes pop-in { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
 @keyframes line-in { from { opacity: 0; transform: translateY(4px); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
@@ -1202,6 +1227,14 @@ dialog select, dialog input[type=text], dialog input[type=password] { width: 100
         <span style="font-size:15px;font-weight:600">A+</span>
       </button>
       <span class="sep"></span>
+      <div class="voice" id="voice" hidden>
+        <button class="btn ghost" id="voice-btn" disabled aria-pressed="false"
+          title="Speak to type. Select a wrong word first to replace it. (Ctrl Shift Space)&#10;Your voice is sent to Google (Chrome) or Microsoft (Edge) to be recognised.">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+          <span class="lbl-wide" id="voice-lbl">Speak</span>
+        </button>
+        <select id="voice-lang" aria-label="Language you will speak" title="Language you will speak"></select>
+      </div>
       <button class="btn ghost" id="join-btn" title="Merge broken lines into paragraphs" disabled>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
         <span class="lbl-wide">Join lines</span>
@@ -1219,6 +1252,7 @@ dialog select, dialog input[type=text], dialog input[type=password] { width: 100
         <div class="notice" id="notice" hidden></div>
         <div class="status-line" id="status" aria-live="polite"></div>
         <label for="output" class="sr">Extracted text</label>
+        <div class="voice-live" id="voice-live" dir="auto" aria-live="polite" hidden></div>
         <textarea id="output" dir="auto" spellcheck="false" placeholder="The text from your image will appear here. You can edit it before copying."></textarea>
         <!-- Shown only before any image is added -->
         <div class="text-empty" id="text-empty">
@@ -1327,6 +1361,10 @@ const el = {
   doubtCount: $("doubt-count"), doubtLegend: $("doubt-legend"), nextDoubt: $("next-doubt"),
 };
 const DOUBT = 60;   // words below this Tesseract confidence are flagged for review
+// Review (doubtful words marked) or Edit. Only the user's own clicks on Review / Edit are remembered: Speak,
+// Join lines and Use Quran text switch to Edit for the moment without changing the saved choice.
+// One-time reset: an earlier version saved those automatic switches, which hid the marks on every new image.
+if (!store.get("viewReset1", false)) { store.set("view", "review"); store.set("viewReset1", true); }
 let view = store.get("view", "review");
 let sel = null;     // { id, l, w } selected line / word in review
 const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -2188,7 +2226,37 @@ function segmentLines(canvas) {
   const W = canvas.width, H = canvas.height;
   const d = canvas.getContext("2d").getImageData(0, 0, W, H).data;
   const gray = new Uint8Array(W * H), hist = new Array(256).fill(0);
-  for (let i = 0; i < W * H; i++) { const g = (d[i * 4] * 299 + d[i * 4 + 1] * 587 + d[i * 4 + 2] * 114) / 1000 | 0; gray[i] = g; hist[g]++; }
+  for (let i = 0; i < W * H; i++) gray[i] = (d[i * 4] * 299 + d[i * 4 + 1] * 587 + d[i * 4 + 2] * 114) / 1000 | 0;
+  // Photos with uneven light (bright at the top, shadowed at the bottom, a fold) make one threshold call whole
+  // regions dark, and the lines there vanish. When the paper's brightness clearly varies, divide by an estimate
+  // of it first (the brightest nearby paper, smoothed), so every part of the page has the same white.
+  // Even scans (and a grey box on white paper) keep the plain path.
+  {
+    const gw = Math.max(4, Math.round(W / 32)), gh = Math.max(4, Math.round(H / 32));
+    const sc = newCanvas(gw, gh), sx = sc.getContext("2d");
+    sx.imageSmoothingQuality = "high"; sx.drawImage(canvas, 0, 0, gw, gh);
+    const sd = sx.getImageData(0, 0, gw, gh), lum = new Float32Array(gw * gh);
+    for (let i = 0; i < gw * gh; i++) lum[i] = sd.data[i * 4] * 0.299 + sd.data[i * 4 + 1] * 0.587 + sd.data[i * 4 + 2] * 0.114;
+    const bg = new Float32Array(gw * gh);   // 5 × 5 max: the paper around each cell, without the text's ink
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+      let m = 0;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const yy = y + dy, xx = x + dx;
+        if (yy >= 0 && yy < gh && xx >= 0 && xx < gw && lum[yy * gw + xx] > m) m = lum[yy * gw + xx];
+      }
+      bg[y * gw + x] = m;
+    }
+    const sorted = Array.from(bg).sort((a, b) => a - b);
+    if (sorted[Math.floor(sorted.length * 0.95)] - sorted[Math.floor(sorted.length * 0.05)] > 28) {
+      for (let i = 0; i < gw * gh; i++) { const v = bg[i] | 0; sd.data[i * 4] = sd.data[i * 4 + 1] = sd.data[i * 4 + 2] = v; sd.data[i * 4 + 3] = 255; }
+      sx.putImageData(sd, 0, 0);
+      const big = newCanvas(W, H), bx = big.getContext("2d");
+      bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = "high"; bx.drawImage(sc, 0, 0, W, H);
+      const bd = bx.getImageData(0, 0, W, H).data;
+      for (let i = 0; i < W * H; i++) gray[i] = Math.min(255, gray[i] * 245 / Math.max(40, bd[i * 4])) | 0;
+    }
+  }
+  for (let i = 0; i < W * H; i++) hist[gray[i]]++;
   let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
   let sB = 0, wB = 0, best = 0, th = 128;
   for (let t = 0; t < 256; t++) {
@@ -2416,9 +2484,11 @@ function junkNuqtaLine(p, thin) {
 async function runLocalLines(item, prompt) {
   const bmp = await createImageBitmap(item.blob);
   const W = bmp.width, H = bmp.height, area = W * H;
-  const isPage = Math.max(W, H) / Math.min(W, H) <= 2 && Math.min(W, H) >= 450;
-  if (!isPage) return false;   // single lines, labels and crops: a normal read already keeps them as they are
-  const k = Math.sqrt(TRAIN_PIXELS / area);   // the page rule: work at the 2.4 MP training size
+  // Any image with two or more printed lines is read line by line, small crops too (a 4-line verse cut from a
+  // page): read whole, Nuqta joins short lines into one. Single lines and labels fall back to a whole read below.
+  if (Math.min(W, H) < 40 || W < 80) return false;
+  // Work at the 2.4 MP training size, but don't blow a small crop up more than 3× (it only gets blurrier).
+  const k = Math.min(Math.sqrt(TRAIN_PIXELS / area), 3);
   const page = document.createElement("canvas");
   page.width = Math.round(W * k); page.height = Math.round(H * k);
   const px = page.getContext("2d");
@@ -2445,7 +2515,14 @@ async function runLocalLines(item, prompt) {
   if (!raw) return false;
   item.dims = `${W} × ${H}`;
   item.straightened = Math.abs(angle) >= 0.3 ? angle : 0;
-  const hs0 = raw.filter(l => !l.gap).map(l => l.rect[3] - l.rect[1]).sort((a, b) => a - b), medH = hs0[hs0.length >> 1] || 1;
+  // A small crop (a few lines cut from a page) has no paragraphs, and with so few lines the spacing statistics
+  // mistake a gap under one line's descenders for a paragraph break: its lines are kept together (below).
+  const small = Math.min(W, H) < 450;
+  const hs0 = raw.filter(l => !l.gap).map(l => l.rect[3] - l.rect[1]).sort((a, b) => a - b);
+  // Typical line height. On a small crop most strips can be fragments (one line with vowel marks splits into
+  // marks / body / descender strips), so measure only the strips at least half as tall as the tallest.
+  const full = small ? hs0.filter(h => h >= hs0[hs0.length - 1] * 0.5) : hs0;
+  const medH = full[full.length >> 1] || 1;
   // Strips with no readable words make Nuqta invent text, so:
   //  · pictures (strongly coloured strips; printed text, even red headings, is ≤ ~5 % coloured) are skipped;
   //  · thin strips holding only vowel marks are merged into the line next to them.
@@ -2465,8 +2542,12 @@ async function runLocalLines(item, prompt) {
     if (pics.includes(l.rect) || picEdge(l.rect)) { skippedPics++; if (layout.length && !layout[layout.length - 1].gap) layout.push({ gap: true }); continue; }
     layout.push({ rect: [...l.rect], thin: l.rect[3] - l.rect[1] < medH * 0.8 });
   }
+  // Small crops: no paragraph gaps (see above), and only strips under half a line count as fragments, since a
+  // real line there can be a little shorter than its neighbours (fewer tall letters, its descenders split off).
+  if (small) layout = layout.filter(l => !l.gap);
+  const frag = small ? 0.5 : 0.7;
   for (let i = 0; i < layout.length; i++) {
-    const l = layout[i]; if (l.gap || l.rect[3] - l.rect[1] >= medH * 0.7) continue;
+    const l = layout[i]; if (l.gap || l.rect[3] - l.rect[1] >= medH * frag) continue;
     const near = j => layout[j] && !layout[j].gap && Math.abs((j > i ? layout[j].rect[1] - l.rect[3] : l.rect[1] - layout[j].rect[3])) < medH * 0.5;
     const j = near(i + 1) ? i + 1 : near(i - 1) ? i - 1 : -1;   // marks usually sit above their line
     if (j < 0) continue;
@@ -2475,10 +2556,11 @@ async function runLocalLines(item, prompt) {
     layout[j].thin = false;
     layout.splice(i, 1); i--;
   }
-  layout = layout.filter((l, i, a) => !l.gap || (i > 0 && !a[i - 1].gap));
+  layout = layout.filter((l, i, a) => !l.gap || (!small && i > 0 && !a[i - 1].gap));
   layout = splitMergedLines(layout, wctx, medH);
-  item.skippedPics = skippedPics;
   const rows = layout.filter(l => !l.gap);
+  if (rows.length < 2) { item.straightened = 0; return false; }   // one line after all: the whole read keeps it as it is
+  item.skippedPics = skippedPics;
   const out = [];   // review lines in original-image pixels
   const render = () => {
     item.text = out.map(l => l.gap ? "" : l.words[0].text).join("\n").replace(/\n{3,}/g, "\n\n");
@@ -3467,6 +3549,7 @@ function renderOutputText() {
 function setActions(on) {
   el.copyBtn.disabled = el.saveBtn.disabled = el.joinBtn.disabled = !on;
   renderJoin();
+  renderVoice();
 }
 // After "Join lines" the button offers to put the lines back, as long as the joined text hasn't been edited since.
 function renderJoin() {
@@ -3494,6 +3577,10 @@ function updateCounts() {
 
 function render() {
   const it = active();
+  if (voice?.on && it?.id !== voice.itemId) stopVoice();   // switched image while listening
+  renderVoice();
+  // Another image: back to the saved Review / Edit choice (Speak or Join lines only switched it for that image)
+  if (it?.id !== render.lastId) { render.lastId = it?.id; view = store.get("view", "review"); }
   const has = items.length > 0;
   el.dropzone.hidden = has;
   el.dropzone.style.display = has ? "none" : "";
@@ -3660,9 +3747,106 @@ el.nextDoubt.onclick = () => {
   const next = list.find(([l, w]) => l > cur[0] || (l === cur[0] && w > cur[1])) || list[0];
   select(next[0], next[1], true);
 };
-function setView(v) { view = v; store.set("view", v); renderReview(); if (v === "edit") el.output.focus(); }
-el.viewReview.onclick = () => setView("review");
-el.viewEdit.onclick = () => setView("edit");
+function setView(v, remember = false) { view = v; if (remember) store.set("view", v); renderReview(); if (v === "edit") el.output.focus(); }
+el.viewReview.onclick = () => setView("review", true);
+el.viewEdit.onclick = () => setView("edit", true);
+
+/* ---------------- Voice typing ----------------
+   The browser's own speech recognition (Chrome: Google; Edge: Microsoft; Safari: Apple). Spoken words replace
+   the selected text, or go in at the cursor, through insertText so Ctrl + Z takes them back. Needs internet
+   and a secure page (https or localhost). Browsers without it (Firefox) don't show the button. */
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const VOICE_LOCALE = { eng: "en-US", ara: "ar-SA", mal: "ml-IN", hin: "hi-IN", tam: "ta-IN", tel: "te-IN", kan: "kn-IN",
+  ben: "bn-IN", mar: "mr-IN", guj: "gu-IN", pan: "pa-IN", ori: "or-IN", urd: "ur-PK", asm: "as-IN", nep: "ne-NP" };
+var voice = { rec: null, on: false, start: 0, end: 0, itemId: null };
+var voiceLang = $("voice-lang");
+if (SpeechRec && window.isSecureContext) {
+  $("voice").hidden = false;
+  voiceLang.innerHTML = `<option value="auto">Auto</option>` + LANGS.filter(l => VOICE_LOCALE[l.code])
+    .map(l => `<option value="${l.code}" lang="${l.lang}">${l.nat}</option>`).join("");
+  voiceLang.value = store.get("voiceLang", "auto");
+  if (!voiceLang.value) voiceLang.value = "auto";
+  voiceLang.onchange = () => { store.set("voiceLang", voiceLang.value); if (voice.on) stopVoice(); renderVoice(); };
+}
+// Auto: the language of this image (its non-English language first: an Arabic page with English is spoken in Arabic).
+function voiceCode() {
+  if (voiceLang.value && voiceLang.value !== "auto") return voiceLang.value;
+  const it = active();
+  const langs = (it?.detected || it?.langs || selected).filter(c => VOICE_LOCALE[c]);
+  return langs.find(c => c !== "eng") || langs[0] || "eng";
+}
+function renderVoice() {
+  const btn = $("voice-btn");
+  if (!voice || !btn || $("voice").hidden) return;
+  btn.disabled = !voice.on && active()?.status !== "done";
+  btn.setAttribute("aria-pressed", voice.on);
+  $("voice-lbl").textContent = voice.on ? "Stop" : "Speak";
+  const auto = voiceLang.querySelector('option[value="auto"]');
+  if (auto) auto.textContent = `Auto · ${byCode[voiceCode()]?.nat || ""}`;
+}
+function showVoiceLive(text) {
+  const live = $("voice-live");
+  live.hidden = false;
+  live.innerHTML = text ? esc(text)
+    : `<span class="hint">Listening in ${esc(byCode[voiceCode()]?.name || "")}… ${voice.start !== voice.end ? "say the right word" : "speak now"}</span>`;
+}
+function startVoice() {
+  const it = active();
+  if (!it || it.status !== "done" || voice.on) return;
+  if (view === "review") setView("edit");   // the text box must be visible to change it
+  voice.start = el.output.selectionStart; voice.end = el.output.selectionEnd; voice.itemId = it.id;
+  const rec = new SpeechRec();
+  rec.lang = VOICE_LOCALE[voiceCode()] || "en-US";
+  rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+  rec.onresult = e => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) insertSpoken(r[0].transcript); else interim += r[0].transcript;
+    }
+    showVoiceLive(interim.trim());
+  };
+  rec.onerror = e => {
+    const msg = {
+      "not-allowed": "Allow the microphone for this page to speak",
+      "service-not-allowed": "Allow the microphone for this page to speak",
+      "network": "Voice typing needs an internet connection",
+      "no-speech": "Didn't hear anything. Try again a little closer to the mic",
+      "audio-capture": "No microphone found",
+      "language-not-supported": `This browser can't recognise ${byCode[voiceCode()]?.name || "this language"} speech`,
+    }[e.error];
+    if (msg) toast(msg);
+  };
+  rec.onend = () => { voice.on = false; voice.rec = null; $("voice-live").hidden = true; renderVoice(); };
+  try { rec.start(); } catch { return; }
+  voice.rec = rec; voice.on = true;
+  if (!store.get("voiceToldPrivacy", false)) {
+    toast("Voice typing: your voice is sent to Google (Chrome) or Microsoft (Edge) to be recognised");
+    store.set("voiceToldPrivacy", true);
+  }
+  showVoiceLive(""); renderVoice();
+}
+function stopVoice() { try { voice.rec?.stop(); } catch {} }
+// Put a finished phrase in place of the selection (or at the cursor), with a space where words would run together.
+function insertSpoken(raw) {
+  let t = raw.trim();
+  if (!t || active()?.id !== voice.itemId) return;
+  const v = el.output.value, a = Math.min(voice.start, v.length), b = Math.min(voice.end, v.length);
+  if (a > 0 && !/\s/.test(v[a - 1])) t = " " + t;
+  if (b < v.length && !/[\s.,،؛:!?؟)\]]/.test(v[b])) t += " ";
+  el.output.focus(); el.output.setSelectionRange(a, b);
+  let ok = false;
+  try { ok = document.execCommand("insertText", false, t); } catch {}
+  if (!ok) { el.output.setRangeText(t, a, b, "end"); el.output.dispatchEvent(new Event("input")); }
+  voice.start = voice.end = a + t.length;   // the next phrase follows this one
+  el.output.setSelectionRange(voice.start, voice.end);
+}
+$("voice-btn").onclick = () => voice.on ? stopVoice() : startVoice();
+document.addEventListener("keydown", e => {
+  if ($("voice").hidden || document.querySelector("dialog[open]")) return;
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === "Space") { e.preventDefault(); voice.on ? stopVoice() : startVoice(); }
+  else if (e.key === "Escape" && voice.on) stopVoice();
+});
 
 /* ---------------- Text actions ---------------- */
 el.output.addEventListener("input", () => {
